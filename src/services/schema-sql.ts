@@ -1,299 +1,392 @@
 export const SUPABASE_SCHEMA_SQL = `-- ==============================================================================
--- PLATAFORMA WHITE-LABEL DE PRESENÇA DIGITAL ELEITORAL
--- SUPABASE POSTGRESQL SCHEMA + MULTI-TENANT ROW LEVEL SECURITY (RLS)
+-- PLATAFORMA WHITE-LABEL MULTI-TENANT DE PRESENÇA DIGITAL ELEITORAL
+-- SUPABASE POSTGRESQL SCHEMA + ROW LEVEL SECURITY (RLS) + STORAGE POLICIES
 -- ==============================================================================
 
--- 1. TABELA PRINCIPAL DE SITES (TENANTS)
-CREATE TABLE IF NOT EXISTS sites (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name VARCHAR(255) NOT NULL,
-  slug VARCHAR(100) UNIQUE NOT NULL,
-  custom_domain VARCHAR(255) UNIQUE,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+-- 1. EXTENSÕES NECESSÁRIAS
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- 2. TABELA CENTRAL DE SITES (TENANTS)
+CREATE TABLE IF NOT EXISTS public.sites (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    slug VARCHAR(100) UNIQUE NOT NULL,
+    domain VARCHAR(255) UNIQUE,
+    custom_domain VARCHAR(255) UNIQUE,
+    status VARCHAR(50) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'draft')),
+    is_active BOOLEAN DEFAULT true NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 2. MEMBROS / USUÁRIOS VINCULADOS AOS SITES (RBAC)
-CREATE TABLE IF NOT EXISTS site_members (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL,
-  user_email VARCHAR(255) NOT NULL,
-  role VARCHAR(50) NOT NULL CHECK (role IN ('admin', 'editor')),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(site_id, user_id)
+-- 3. PERFIS DE USUÁRIOS (Sincronizado com auth.users)
+CREATE TABLE IF NOT EXISTS public.profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    full_name VARCHAR(255) NOT NULL,
+    avatar_url TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 3. CONFIGURAÇÕES GERAIS E INFORMAÇÕES ELEITORAIS (TSE)
-CREATE TABLE IF NOT EXISTS site_settings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL UNIQUE REFERENCES sites(id) ON DELETE CASCADE,
-  candidate_name VARCHAR(255) NOT NULL,
-  candidate_number VARCHAR(20) NOT NULL,
-  position VARCHAR(100) NOT NULL,
-  party VARCHAR(50) NOT NULL,
-  coalition VARCHAR(255),
-  municipality VARCHAR(100),
-  state VARCHAR(2),
-  slogan VARCHAR(255),
-  legal_information TEXT,
-  cnpj VARCHAR(50),
-  logo_url TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+-- 4. MEMBROS E PERMISSÕES DO SITE (MULTI-TENANT RBAC)
+CREATE TABLE IF NOT EXISTS public.site_members (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_email VARCHAR(255),
+    role VARCHAR(50) NOT NULL DEFAULT 'editor' CHECK (role IN ('owner', 'admin', 'editor')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    UNIQUE (site_id, user_id)
 );
 
--- 4. TEMA E IDENTIDADE VISUAL
-CREATE TABLE IF NOT EXISTS theme_settings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL UNIQUE REFERENCES sites(id) ON DELETE CASCADE,
-  theme_name VARCHAR(100) DEFAULT 'Moderno',
-  primary_color VARCHAR(50) DEFAULT '#0284c7',
-  secondary_color VARCHAR(50) DEFAULT '#0f172a',
-  accent_color VARCHAR(50) DEFAULT '#f59e0b',
-  font_family VARCHAR(100) DEFAULT 'Inter, sans-serif',
-  button_style VARCHAR(50) DEFAULT 'rounded-full',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 5. SEÇÃO HERO
-CREATE TABLE IF NOT EXISTS hero_section (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL UNIQUE REFERENCES sites(id) ON DELETE CASCADE,
-  title VARCHAR(255) NOT NULL,
-  subtitle TEXT NOT NULL,
-  cta_text VARCHAR(100) DEFAULT 'Conheça Nossas Propostas',
-  cta_link VARCHAR(255) DEFAULT '/propostas',
-  secondary_cta_text VARCHAR(100) DEFAULT 'Receber Notícias no WhatsApp',
-  secondary_cta_link VARCHAR(255) DEFAULT '/contato',
-  hero_image_url TEXT,
-  background_image_url TEXT,
-  badge_text VARCHAR(100) DEFAULT 'Candidato Oficial 2026',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 6. BIOGRAFIA E HISTÓRIA DO CANDIDATO
-CREATE TABLE IF NOT EXISTS about_section (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL UNIQUE REFERENCES sites(id) ON DELETE CASCADE,
-  title VARCHAR(255) NOT NULL,
-  biography TEXT NOT NULL,
-  trajectory TEXT,
-  quote TEXT,
-  image_url TEXT,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 7. INDICADORES E MÉTRICAS (KPIS)
-CREATE TABLE IF NOT EXISTS indicators (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-  value VARCHAR(50) NOT NULL,
-  title VARCHAR(150) NOT NULL,
-  description TEXT,
-  icon VARCHAR(50) DEFAULT 'TrendingUp',
-  display_order INT DEFAULT 0,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 8. CATEGORIAS DE PROPOSTAS
-CREATE TABLE IF NOT EXISTS proposal_categories (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-  name VARCHAR(100) NOT NULL,
-  display_order INT DEFAULT 0,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 9. PROPOSTAS DA CAMPANHA
-CREATE TABLE IF NOT EXISTS proposals (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-  category_id UUID REFERENCES proposal_categories(id) ON DELETE SET NULL,
-  title VARCHAR(255) NOT NULL,
-  description TEXT NOT NULL,
-  image_url TEXT,
-  icon VARCHAR(50) DEFAULT 'FileText',
-  display_order INT DEFAULT 0,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 10. AÇÕES, OBRAS E CONQUISTAS
-CREATE TABLE IF NOT EXISTS actions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-  title VARCHAR(255) NOT NULL,
-  description TEXT NOT NULL,
-  category VARCHAR(100) DEFAULT 'Infraestrutura',
-  date VARCHAR(50),
-  municipality VARCHAR(100),
-  image_url TEXT,
-  external_url TEXT,
-  display_order INT DEFAULT 0,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 11. AGENDA OFICIAL E EVENTOS
-CREATE TABLE IF NOT EXISTS events (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-  title VARCHAR(255) NOT NULL,
-  description TEXT,
-  event_date DATE NOT NULL,
-  event_time VARCHAR(50) NOT NULL,
-  location VARCHAR(255) NOT NULL,
-  municipality VARCHAR(100),
-  map_url TEXT,
-  display_order INT DEFAULT 0,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 12. NOTÍCIAS E ARTIGOS
-CREATE TABLE IF NOT EXISTS news (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-  title VARCHAR(255) NOT NULL,
-  slug VARCHAR(255) NOT NULL,
-  summary TEXT,
-  content TEXT NOT NULL,
-  category VARCHAR(100) DEFAULT 'Geral',
-  author VARCHAR(100) DEFAULT 'Assessoria de Comunicação',
-  image_url TEXT,
-  published_at DATE DEFAULT CURRENT_DATE,
-  is_published BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(site_id, slug)
-);
-
--- 13. VÍDEOS (YOUTUBE)
-CREATE TABLE IF NOT EXISTS videos (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-  title VARCHAR(255) NOT NULL,
-  description TEXT,
-  youtube_url TEXT NOT NULL,
-  thumbnail_url TEXT,
-  category VARCHAR(100) DEFAULT 'Pronunciamento',
-  display_order INT DEFAULT 0,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 14. GALERIA DE FOTOS
-CREATE TABLE IF NOT EXISTS gallery (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-  image_url TEXT NOT NULL,
-  caption TEXT,
-  display_order INT DEFAULT 0,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 15. REDES SOCIAIS
-CREATE TABLE IF NOT EXISTS social_links (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
-  platform VARCHAR(50) NOT NULL,
-  url TEXT NOT NULL,
-  username VARCHAR(100),
-  display_order INT DEFAULT 0,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 16. CONTATO E ATENDIMENTO
-CREATE TABLE IF NOT EXISTS contact_settings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  site_id UUID NOT NULL UNIQUE REFERENCES sites(id) ON DELETE CASCADE,
-  whatsapp VARCHAR(50) NOT NULL,
-  email VARCHAR(255) NOT NULL,
-  phone VARCHAR(50),
-  address TEXT,
-  city VARCHAR(100),
-  state VARCHAR(2),
-  office_hours VARCHAR(255),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- ==============================================================================
--- ROW LEVEL SECURITY (RLS) POLICIES & HELPER FUNCTIONS
--- ==============================================================================
-
--- Função auxiliar que verifica se o usuário autenticado é membro do site
-CREATE OR REPLACE FUNCTION public.is_member_of(target_site_id UUID)
+-- FUNÇÃO AUXILIAR DE SEGURANÇA PARA VERIFICAR SE O USUÁRIO PERTENCE AO SITE
+CREATE OR REPLACE FUNCTION public.is_member_of(site_id UUID)
 RETURNS BOOLEAN AS $$
 BEGIN
   RETURN EXISTS (
-    SELECT 1 FROM site_members
-    WHERE site_id = target_site_id
-      AND user_id = auth.uid()
+    SELECT 1 FROM public.site_members
+    WHERE site_members.site_id = is_member_of.site_id
+      AND site_members.user_id = auth.uid()
   );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Habilitar RLS em todas as tabelas
-ALTER TABLE sites ENABLE ROW LEVEL SECURITY;
-ALTER TABLE site_members ENABLE ROW LEVEL SECURITY;
-ALTER TABLE site_settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE theme_settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE hero_section ENABLE ROW LEVEL SECURITY;
-ALTER TABLE about_section ENABLE ROW LEVEL SECURITY;
-ALTER TABLE indicators ENABLE ROW LEVEL SECURITY;
-ALTER TABLE proposal_categories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE proposals ENABLE ROW LEVEL SECURITY;
-ALTER TABLE actions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE news ENABLE ROW LEVEL SECURITY;
-ALTER TABLE videos ENABLE ROW LEVEL SECURITY;
-ALTER TABLE gallery ENABLE ROW LEVEL SECURITY;
-ALTER TABLE social_links ENABLE ROW LEVEL SECURITY;
-ALTER TABLE contact_settings ENABLE ROW LEVEL SECURITY;
+-- FUNÇÃO AUXILIAR PARA VERIFICAR CARGO MÍNIMO (OWNER/ADMIN)
+CREATE OR REPLACE FUNCTION public.is_admin_of(site_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM public.site_members
+    WHERE site_members.site_id = is_admin_of.site_id
+      AND site_members.user_id = auth.uid()
+      AND site_members.role IN ('owner', 'admin')
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- POLÍTICAS PÚBLICAS DE LEITURA (ANON / VISITANTES)
-CREATE POLICY "Public Read Active Sites" ON sites FOR SELECT USING (is_active = true);
-CREATE POLICY "Public Read Settings" ON site_settings FOR SELECT USING (true);
-CREATE POLICY "Public Read Theme" ON theme_settings FOR SELECT USING (true);
-CREATE POLICY "Public Read Hero" ON hero_section FOR SELECT USING (true);
-CREATE POLICY "Public Read About" ON about_section FOR SELECT USING (is_active = true);
-CREATE POLICY "Public Read Indicators" ON indicators FOR SELECT USING (is_active = true);
-CREATE POLICY "Public Read Categories" ON proposal_categories FOR SELECT USING (is_active = true);
-CREATE POLICY "Public Read Proposals" ON proposals FOR SELECT USING (is_active = true);
-CREATE POLICY "Public Read Actions" ON actions FOR SELECT USING (is_active = true);
-CREATE POLICY "Public Read Events" ON events FOR SELECT USING (is_active = true);
-CREATE POLICY "Public Read News" ON news FOR SELECT USING (is_published = true);
-CREATE POLICY "Public Read Videos" ON videos FOR SELECT USING (is_active = true);
-CREATE POLICY "Public Read Gallery" ON gallery FOR SELECT USING (is_active = true);
-CREATE POLICY "Public Read Social" ON social_links FOR SELECT USING (is_active = true);
-CREATE POLICY "Public Read Contact" ON contact_settings FOR SELECT USING (true);
+-- 5. CONFIGURAÇÕES GERAIS DO CANDIDATO / CAMPANHA
+CREATE TABLE IF NOT EXISTS public.site_settings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID UNIQUE NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    candidate_name VARCHAR(255) NOT NULL,
+    position VARCHAR(255) NOT NULL,
+    slogan TEXT,
+    party VARCHAR(100),
+    candidate_number VARCHAR(20),
+    coalition TEXT,
+    municipality VARCHAR(255) NOT NULL,
+    state VARCHAR(10) NOT NULL,
+    phone VARCHAR(50),
+    whatsapp VARCHAR(50),
+    email VARCHAR(255),
+    domain VARCHAR(255),
+    logo_url TEXT,
+    favicon_url TEXT,
+    legal_information TEXT,
+    cnpj VARCHAR(50),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
 
--- POLÍTICAS DE GESTÃO DO ADMIN (MEMBROS AUTENTICADOS DO TENANT ESPECÍFICO)
-CREATE POLICY "Admin Full Access Settings" ON site_settings FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access Theme" ON theme_settings FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access Hero" ON hero_section FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access About" ON about_section FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access Indicators" ON indicators FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access Categories" ON proposal_categories FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access Proposals" ON proposals FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access Actions" ON actions FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access Events" ON events FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access News" ON news FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access Videos" ON videos FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access Gallery" ON gallery FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access Social" ON social_links FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Full Access Contact" ON contact_settings FOR ALL USING (public.is_member_of(site_id));
-CREATE POLICY "Admin Read Members" ON site_members FOR SELECT USING (public.is_member_of(site_id));
+-- 6. TEMA E APARÊNCIA VISUAL
+CREATE TABLE IF NOT EXISTS public.theme_settings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID UNIQUE NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    primary_color VARCHAR(50) DEFAULT '#0284c7' NOT NULL,
+    secondary_color VARCHAR(50) DEFAULT '#0f172a' NOT NULL,
+    accent_color VARCHAR(50) DEFAULT '#f59e0b' NOT NULL,
+    button_style VARCHAR(50) DEFAULT 'rounded-full' NOT NULL CHECK (button_style IN ('rounded-full', 'rounded-lg', 'rounded-none')),
+    font_family VARCHAR(50) DEFAULT 'Plus Jakarta Sans' NOT NULL,
+    theme_mode VARCHAR(50) DEFAULT 'light' NOT NULL CHECK (theme_mode IN ('light', 'dark', 'system')),
+    preset_name VARCHAR(50) DEFAULT 'moderno',
+    logo_url TEXT,
+    favicon_url TEXT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 7. HERO SECTION
+CREATE TABLE IF NOT EXISTS public.hero (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID UNIQUE NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    subtitle TEXT,
+    candidate_name VARCHAR(255) NOT NULL,
+    position VARCHAR(255) NOT NULL,
+    image_url TEXT,
+    background_video_url TEXT,
+    primary_button_text VARCHAR(100) DEFAULT 'Conheça as Propostas',
+    primary_button_url VARCHAR(255) DEFAULT '/propostas',
+    secondary_button_text VARCHAR(100) DEFAULT 'Fale no WhatsApp',
+    secondary_button_url VARCHAR(255) DEFAULT '/contato',
+    badge_text VARCHAR(100) DEFAULT 'Compromisso com o Futuro',
+    is_active BOOLEAN DEFAULT true NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 8. INDICADORES (KPIS)
+CREATE TABLE IF NOT EXISTS public.indicators (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    value VARCHAR(100) NOT NULL,
+    description TEXT,
+    icon VARCHAR(100) DEFAULT 'TrendingUp',
+    sort_order INT DEFAULT 0 NOT NULL,
+    is_active BOOLEAN DEFAULT true NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 9. SOBRE / BIOGRAFIA
+CREATE TABLE IF NOT EXISTS public.about (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID UNIQUE NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    biography TEXT NOT NULL,
+    trajectory TEXT,
+    professional_info TEXT,
+    image_url TEXT,
+    quote TEXT,
+    is_active BOOLEAN DEFAULT true NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 10. CATEGORIAS DE PROPOSTAS
+CREATE TABLE IF NOT EXISTS public.proposal_categories (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    slug VARCHAR(100) NOT NULL,
+    sort_order INT DEFAULT 0 NOT NULL,
+    is_active BOOLEAN DEFAULT true NOT NULL,
+    UNIQUE (site_id, slug)
+);
+
+-- 11. PROPOSTAS
+CREATE TABLE IF NOT EXISTS public.proposals (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    category_id UUID REFERENCES public.proposal_categories(id) ON DELETE SET NULL,
+    title VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    image_url TEXT,
+    icon VARCHAR(100) DEFAULT 'FileText',
+    sort_order INT DEFAULT 0 NOT NULL,
+    is_published BOOLEAN DEFAULT true NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 12. ATUAÇÃO / AÇÕES / PROJETOS
+CREATE TABLE IF NOT EXISTS public.actions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    category VARCHAR(100) NOT NULL,
+    date DATE NOT NULL,
+    municipality VARCHAR(255) NOT NULL,
+    image_url TEXT,
+    video_url TEXT,
+    external_url TEXT,
+    is_published BOOLEAN DEFAULT true NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 13. AGENDA DE EVENTOS
+CREATE TABLE IF NOT EXISTS public.events (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    event_date DATE NOT NULL,
+    event_time VARCHAR(50) NOT NULL,
+    municipality VARCHAR(255) NOT NULL,
+    location VARCHAR(255) NOT NULL,
+    description TEXT,
+    image_url TEXT,
+    map_url TEXT,
+    is_published BOOLEAN DEFAULT true NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 14. NOTÍCIAS
+CREATE TABLE IF NOT EXISTS public.news (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    slug VARCHAR(255) NOT NULL,
+    summary TEXT NOT NULL,
+    content TEXT NOT NULL,
+    image_url TEXT,
+    category VARCHAR(100) NOT NULL,
+    author VARCHAR(255) NOT NULL,
+    published_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    is_published BOOLEAN DEFAULT true NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    UNIQUE (site_id, slug)
+);
+
+-- 15. VÍDEOS (YOUTUBE)
+CREATE TABLE IF NOT EXISTS public.videos (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    youtube_url TEXT NOT NULL,
+    thumbnail_url TEXT,
+    category VARCHAR(100) NOT NULL,
+    sort_order INT DEFAULT 0 NOT NULL,
+    is_active BOOLEAN DEFAULT true NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 16. GALERIA DE FOTOS
+CREATE TABLE IF NOT EXISTS public.gallery (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    image_url TEXT NOT NULL,
+    storage_path TEXT,
+    caption TEXT,
+    sort_order INT DEFAULT 0 NOT NULL,
+    is_active BOOLEAN DEFAULT true NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 17. REDES SOCIAIS
+CREATE TABLE IF NOT EXISTS public.social_links (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    platform VARCHAR(50) NOT NULL,
+    url TEXT NOT NULL,
+    icon VARCHAR(50),
+    sort_order INT DEFAULT 0 NOT NULL,
+    is_active BOOLEAN DEFAULT true NOT NULL
+);
+
+-- 18. CONFIGURAÇÕES DE CONTATO
+CREATE TABLE IF NOT EXISTS public.contact_settings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    site_id UUID UNIQUE NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+    whatsapp VARCHAR(50),
+    phone VARCHAR(50),
+    email VARCHAR(255),
+    address TEXT,
+    city VARCHAR(255),
+    state VARCHAR(10),
+    instagram VARCHAR(255),
+    facebook VARCHAR(255),
+    youtube VARCHAR(255),
+    tiktok VARCHAR(255),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- ==============================================================================
+-- ÍNDICES PARA ALTA PERFORMANCE
+-- ==============================================================================
+CREATE INDEX IF NOT EXISTS idx_sites_slug ON public.sites(slug);
+CREATE INDEX IF NOT EXISTS idx_site_members_user ON public.site_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_site_members_site ON public.site_members(site_id);
+CREATE INDEX IF NOT EXISTS idx_proposals_site ON public.proposals(site_id);
+CREATE INDEX IF NOT EXISTS idx_actions_site ON public.actions(site_id);
+CREATE INDEX IF NOT EXISTS idx_events_site ON public.events(site_id);
+CREATE INDEX IF NOT EXISTS idx_news_site_slug ON public.news(site_id, slug);
+CREATE INDEX IF NOT EXISTS idx_videos_site ON public.videos(site_id);
+CREATE INDEX IF NOT EXISTS idx_gallery_site ON public.gallery(site_id);
+CREATE INDEX IF NOT EXISTS idx_indicators_site ON public.indicators(site_id);
+
+-- ==============================================================================
+-- ROW LEVEL SECURITY (RLS) POLICIES
+-- ==============================================================================
+
+-- HABILITAR RLS EM TODAS AS TABELAS
+ALTER TABLE public.sites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.site_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.site_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.theme_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.hero ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.indicators ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.about ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.proposal_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.proposals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.actions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.news ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.videos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gallery ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.social_links ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contact_settings ENABLE ROW LEVEL SECURITY;
+
+-- 1. POLÍTICAS PARA SITES
+CREATE POLICY "Public read active sites" ON public.sites 
+  FOR SELECT USING (status = 'active' OR is_active = true);
+
+CREATE POLICY "Members can view own sites" ON public.sites 
+  FOR SELECT USING (public.is_member_of(id));
+
+CREATE POLICY "Admins can update own site" ON public.sites 
+  FOR UPDATE USING (public.is_admin_of(id));
+
+-- 2. POLÍTICAS PARA PROFILES
+CREATE POLICY "Users can view all profiles" ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
+
+-- 3. POLÍTICAS PARA SITE_MEMBERS
+CREATE POLICY "Members can view site members" ON public.site_members 
+  FOR SELECT USING (public.is_member_of(site_id));
+
+CREATE POLICY "Admins can manage site members" ON public.site_members 
+  FOR ALL USING (public.is_admin_of(site_id));
+
+-- 4. POLÍTICAS PARA CONTEÚDO PÚBLICO (SELECT)
+CREATE POLICY "Public can view site settings" ON public.site_settings FOR SELECT USING (true);
+CREATE POLICY "Public can view theme settings" ON public.theme_settings FOR SELECT USING (true);
+CREATE POLICY "Public can view hero" ON public.hero FOR SELECT USING (is_active = true);
+CREATE POLICY "Public can view indicators" ON public.indicators FOR SELECT USING (is_active = true);
+CREATE POLICY "Public can view about" ON public.about FOR SELECT USING (is_active = true);
+CREATE POLICY "Public can view proposal categories" ON public.proposal_categories FOR SELECT USING (is_active = true);
+CREATE POLICY "Public can view published proposals" ON public.proposals FOR SELECT USING (is_published = true);
+CREATE POLICY "Public can view published actions" ON public.actions FOR SELECT USING (is_published = true);
+CREATE POLICY "Public can view published events" ON public.events FOR SELECT USING (is_published = true);
+CREATE POLICY "Public can view published news" ON public.news FOR SELECT USING (is_published = true);
+CREATE POLICY "Public can view videos" ON public.videos FOR SELECT USING (is_active = true);
+CREATE POLICY "Public can view gallery" ON public.gallery FOR SELECT USING (is_active = true);
+CREATE POLICY "Public can view social links" ON public.social_links FOR SELECT USING (is_active = true);
+CREATE POLICY "Public can view contact settings" ON public.contact_settings FOR SELECT USING (true);
+
+-- 5. POLÍTICAS DE GESTÃO PARA MEMBROS AUTENTICADOS (INSERT, UPDATE, DELETE)
+CREATE POLICY "Members can manage site settings" ON public.site_settings FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage theme settings" ON public.theme_settings FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage hero" ON public.hero FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage indicators" ON public.indicators FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage about" ON public.about FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage proposal categories" ON public.proposal_categories FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage proposals" ON public.proposals FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage actions" ON public.actions FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage events" ON public.events FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage news" ON public.news FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage videos" ON public.videos FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage gallery" ON public.gallery FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage social links" ON public.social_links FOR ALL USING (public.is_member_of(site_id));
+CREATE POLICY "Members can manage contact settings" ON public.contact_settings FOR ALL USING (public.is_member_of(site_id));
+
+-- ==============================================================================
+-- SUPABASE STORAGE BUCKET & POLICIES
+-- ==============================================================================
+INSERT INTO storage.buckets (id, name, public) 
+VALUES ('campaign-assets', 'campaign-assets', true)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE POLICY "Public Read Campaign Assets"
+ON storage.objects FOR SELECT
+USING (bucket_id = 'campaign-assets');
+
+CREATE POLICY "Members Upload Campaign Assets"
+ON storage.objects FOR INSERT
+WITH CHECK (
+  bucket_id = 'campaign-assets' AND
+  auth.role() = 'authenticated'
+);
+
+-- Garantir coluna background_video_url em bancos já existentes
+ALTER TABLE public.hero ADD COLUMN IF NOT EXISTS background_video_url TEXT;
 `;

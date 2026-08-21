@@ -60,6 +60,12 @@ const STORAGE_KEYS = {
   CURRENT_USER: 'wl_current_user',
 };
 
+function isValidUUID(str?: string | null): boolean {
+  if (!str) return false;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(str);
+}
+
 class LocalDataStore {
   private get<T>(key: string, fallback: T): T {
     try {
@@ -76,7 +82,6 @@ class LocalDataStore {
     } catch (e) {
       console.warn('LocalStorage Quota Exceeded / Error, clearing huge media strings:', e);
       try {
-        // If hero had a massive base64 string, remove heavy fields from localStorage copy
         if (key === STORAGE_KEYS.HERO && typeof value === 'object' && value !== null) {
           const sanitized: any = { ...value };
           for (const siteId in sanitized) {
@@ -123,16 +128,31 @@ class LocalDataStore {
   // ===================== SITES =====================
   public async getSites(): Promise<Site[]> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('sites').select('*').order('created_at', { ascending: true });
-      if (!error && data) return data;
+      try {
+        const { data, error } = await supabase
+          .from('sites')
+          .select('*')
+          .order('created_at', { ascending: true });
+        if (!error && data && data.length > 0) return data;
+      } catch (e) {
+        console.warn('Supabase getSites error:', e);
+      }
     }
     return this.get<Site[]>(STORAGE_KEYS.SITES, SEED_SITES);
   }
 
   public async getSiteBySlug(slug: string): Promise<Site | null> {
     if (isSupabaseConfigured && supabase) {
-      const { data } = await supabase.from('sites').select('*').eq('slug', slug).single();
-      if (data) return data;
+      try {
+        const { data } = await supabase
+          .from('sites')
+          .select('*')
+          .or(`slug.eq.${slug},id.eq.${slug}`)
+          .single();
+        if (data) return data;
+      } catch {
+        // Fallback
+      }
     }
     const sites = await this.getSites();
     return sites.find(s => s.slug === slug || s.id === slug) || sites[0] || null;
@@ -145,7 +165,7 @@ class LocalDataStore {
 
   public async createSite(site: Partial<Site> & { name: string; slug: string }): Promise<Site> {
     const newSite: Site = {
-      id: site.id || `site-${Date.now()}`,
+      id: site.id || (isValidUUID(site.id) ? site.id : `site-${Date.now()}`),
       name: site.name,
       slug: site.slug,
       custom_domain: site.custom_domain || null,
@@ -156,8 +176,12 @@ class LocalDataStore {
     };
 
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('sites').insert(newSite).select().single();
-      if (!error && data) return data;
+      try {
+        const { data, error } = await supabase.from('sites').insert(newSite).select().single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.warn('Supabase createSite error:', e);
+      }
     }
 
     const sites = await this.getSites();
@@ -189,7 +213,7 @@ class LocalDataStore {
     await this.updateHero({
       site_id: newSite.id,
       title: `Bem-vindo ao site oficial de ${newSite.name}`,
-      subtitle: 'Conheça nossa trajetória, propostas e compromissos para nossa cidade.',
+      subtitle: 'Conheça nossa trajetória, propostas e compromissos.',
       candidate_name: newSite.name,
       position: 'Candidato(a)',
       primary_button_text: 'Ver Propostas',
@@ -214,8 +238,12 @@ class LocalDataStore {
 
   public async updateSite(id: string, updates: Partial<Site>): Promise<Site> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('sites').update(updates).eq('id', id).select().single();
-      if (!error && data) return data;
+      try {
+        const { data, error } = await supabase.from('sites').update(updates).eq('id', id).select().single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.warn('Supabase updateSite error:', e);
+      }
     }
     const sites = await this.getSites();
     const index = sites.findIndex(s => s.id === id);
@@ -228,8 +256,15 @@ class LocalDataStore {
   // ===================== MEMBERS & RBAC =====================
   public async getSiteMembers(siteId: string): Promise<SiteMember[]> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase.from('site_members').select('*, profile:profiles(*)').eq('site_id', siteId);
-      if (!error && data) return data;
+      try {
+        const { data, error } = await supabase
+          .from('site_members')
+          .select('*, profile:profiles(*)')
+          .eq('site_id', siteId);
+        if (!error && data && data.length > 0) return data;
+      } catch (e) {
+        console.warn('Supabase getSiteMembers error:', e);
+      }
     }
     const members = this.get<SiteMember[]>(STORAGE_KEYS.MEMBERS, SEED_SITE_MEMBERS);
     const profiles = this.get<Profile[]>(STORAGE_KEYS.PROFILES, SEED_PROFILES);
@@ -318,6 +353,13 @@ class LocalDataStore {
   }
 
   public async removeSiteMember(memberId: string): Promise<void> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase.from('site_members').delete().eq('id', memberId);
+      } catch (e) {
+        console.warn('Supabase removeSiteMember error:', e);
+      }
+    }
     const members = this.get<SiteMember[]>(STORAGE_KEYS.MEMBERS, SEED_SITE_MEMBERS);
     const updated = members.filter(m => m.id !== memberId);
     this.set(STORAGE_KEYS.MEMBERS, updated);
@@ -326,20 +368,24 @@ class LocalDataStore {
   // ===================== SITE SETTINGS =====================
   public async getSiteSettings(siteId: string): Promise<SiteSettings> {
     if (isSupabaseConfigured && supabase) {
-      const { data } = await supabase.from('site_settings').select('*').eq('site_id', siteId).single();
-      if (data) return data;
+      try {
+        const { data, error } = await supabase.from('site_settings').select('*').eq('site_id', siteId).single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.warn('Supabase getSiteSettings error:', e);
+      }
     }
     const allSettings = this.get<Record<string, SiteSettings>>(STORAGE_KEYS.SITE_SETTINGS, SEED_SITE_SETTINGS);
     return allSettings[siteId] || {
       site_id: siteId,
-      candidate_name: 'Nome do Candidato',
-      candidate_number: '77000',
-      position: 'Cargo Eleitoral',
-      slogan: 'Slogan da campanha eleitoral',
-      party: 'PARTIDO',
-      municipality: 'São Paulo',
-      state: 'SP',
-      legal_information: 'Eleição 2026',
+      candidate_name: 'Ney Amorim',
+      candidate_number: '1577',
+      position: 'Deputado Federal',
+      slogan: 'Trabalho e compromisso com o Acre',
+      party: 'MDB',
+      municipality: 'Rio Branco',
+      state: 'AC',
+      legal_information: 'Eleição 2026 — Federação / Partido MDB',
     };
   }
 
@@ -348,18 +394,32 @@ class LocalDataStore {
     const settings = typeof param1 === 'object' ? param1 : (param2 || {});
 
     if (isSupabaseConfigured && supabase) {
-      const { data } = await supabase.from('site_settings').upsert({ ...settings, site_id: siteId }).select().single();
-      if (data) return data;
+      try {
+        const { data, error } = await supabase
+          .from('site_settings')
+          .upsert({ ...settings, site_id: siteId }, { onConflict: 'site_id' })
+          .select()
+          .single();
+        if (!error && data) {
+          const all = this.get<Record<string, SiteSettings>>(STORAGE_KEYS.SITE_SETTINGS, SEED_SITE_SETTINGS);
+          all[siteId] = data;
+          this.set(STORAGE_KEYS.SITE_SETTINGS, all);
+          return data;
+        }
+      } catch (e) {
+        console.warn('Supabase updateSiteSettings error:', e);
+      }
     }
+
     const all = this.get<Record<string, SiteSettings>>(STORAGE_KEYS.SITE_SETTINGS, SEED_SITE_SETTINGS);
     const current = all[siteId] || {
       site_id: siteId,
-      candidate_name: 'Candidato',
-      candidate_number: '77000',
-      position: 'Cargo',
-      party: 'PARTIDO',
-      municipality: 'São Paulo',
-      state: 'SP',
+      candidate_name: 'Ney Amorim',
+      candidate_number: '1577',
+      position: 'Deputado Federal',
+      party: 'MDB',
+      municipality: 'Rio Branco',
+      state: 'AC',
     };
     all[siteId] = {
       ...current,
@@ -374,8 +434,12 @@ class LocalDataStore {
   // ===================== THEME SETTINGS =====================
   public async getThemeSettings(siteId: string): Promise<ThemeSettings> {
     if (isSupabaseConfigured && supabase) {
-      const { data } = await supabase.from('theme_settings').select('*').eq('site_id', siteId).single();
-      if (data) return data;
+      try {
+        const { data, error } = await supabase.from('theme_settings').select('*').eq('site_id', siteId).single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.warn('Supabase getThemeSettings error:', e);
+      }
     }
     const all = this.get<Record<string, ThemeSettings>>(STORAGE_KEYS.THEME_SETTINGS, SEED_THEME_SETTINGS);
     return all[siteId] || {
@@ -394,9 +458,23 @@ class LocalDataStore {
     const settings = typeof param1 === 'object' ? param1 : (param2 || {});
 
     if (isSupabaseConfigured && supabase) {
-      const { data } = await supabase.from('theme_settings').upsert({ ...settings, site_id: siteId }).select().single();
-      if (data) return data;
+      try {
+        const { data, error } = await supabase
+          .from('theme_settings')
+          .upsert({ ...settings, site_id: siteId }, { onConflict: 'site_id' })
+          .select()
+          .single();
+        if (!error && data) {
+          const all = this.get<Record<string, ThemeSettings>>(STORAGE_KEYS.THEME_SETTINGS, SEED_THEME_SETTINGS);
+          all[siteId] = data;
+          this.set(STORAGE_KEYS.THEME_SETTINGS, all);
+          return data;
+        }
+      } catch (e) {
+        console.warn('Supabase updateThemeSettings error:', e);
+      }
     }
+
     const all = this.get<Record<string, ThemeSettings>>(STORAGE_KEYS.THEME_SETTINGS, SEED_THEME_SETTINGS);
     const current = all[siteId] || {
       site_id: siteId,
@@ -417,8 +495,12 @@ class LocalDataStore {
   // ===================== HERO SECTION =====================
   public async getHero(siteId: string): Promise<HeroSection> {
     if (isSupabaseConfigured && supabase) {
-      const { data } = await supabase.from('hero').select('*').eq('site_id', siteId).single();
-      if (data) return data;
+      try {
+        const { data, error } = await supabase.from('hero').select('*').eq('site_id', siteId).single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.warn('Supabase getHero error:', e);
+      }
     }
     const seed = SEED_HERO[siteId];
     const all = this.get<Record<string, HeroSection>>(STORAGE_KEYS.HERO, SEED_HERO);
@@ -432,16 +514,17 @@ class LocalDataStore {
     }
     return seed || {
       site_id: siteId,
-      title: 'Compromisso com o Futuro de São Paulo',
-      subtitle: 'Conheça nossos projetos, trajetória e propostas.',
-      candidate_name: 'Candidato',
-      position: 'Deputado',
+      title: 'Compromisso com o Futuro do Acre',
+      subtitle: 'Conheça nossos projetos, trajetória e propostas para transformar o Acre.',
+      candidate_name: 'Ney Amorim',
+      position: 'Deputado Federal',
       primary_button_text: 'Ver Propostas',
       primary_button_url: '/propostas',
       secondary_button_text: 'Fale Conosco',
       secondary_button_url: '/contato',
       badge_text: 'Plano de Trabalho 2026',
       is_active: true,
+      background_video_url: '/hero.mp4',
     };
   }
 
@@ -450,16 +533,30 @@ class LocalDataStore {
     const hero = typeof param1 === 'object' ? param1 : (param2 || {});
 
     if (isSupabaseConfigured && supabase) {
-      const { data } = await supabase.from('hero').upsert({ ...hero, site_id: siteId }).select().single();
-      if (data) return data;
+      try {
+        const { data, error } = await supabase
+          .from('hero')
+          .upsert({ ...hero, site_id: siteId }, { onConflict: 'site_id' })
+          .select()
+          .single();
+        if (!error && data) {
+          const all = this.get<Record<string, HeroSection>>(STORAGE_KEYS.HERO, SEED_HERO);
+          all[siteId] = data;
+          this.set(STORAGE_KEYS.HERO, all);
+          return data;
+        }
+      } catch (e) {
+        console.warn('Supabase updateHero error:', e);
+      }
     }
+
     const all = this.get<Record<string, HeroSection>>(STORAGE_KEYS.HERO, SEED_HERO);
     const current = all[siteId] || {
       site_id: siteId,
       title: 'Compromisso com o Futuro',
       subtitle: 'Conheça nossos projetos',
-      candidate_name: 'Candidato',
-      position: 'Cargo',
+      candidate_name: 'Ney Amorim',
+      position: 'Deputado Federal',
       is_active: true,
     };
     all[siteId] = {
@@ -475,10 +572,20 @@ class LocalDataStore {
   // ===================== INDICATORS (KPIS) =====================
   public async getIndicators(siteId: string, onlyActive = false): Promise<Indicator[]> {
     if (isSupabaseConfigured && supabase) {
-      let query = supabase.from('indicators').select('*').eq('site_id', siteId);
-      if (onlyActive) query = query.eq('is_active', true);
-      const { data } = await query;
-      if (data) return data;
+      try {
+        let query = supabase.from('indicators').select('*').eq('site_id', siteId);
+        if (onlyActive) query = query.eq('is_active', true);
+        const { data, error } = await query.order('sort_order', { ascending: true });
+        if (!error && data && data.length > 0) {
+          return data.map(i => ({
+            ...i,
+            display_order: i.display_order ?? i.sort_order ?? 0,
+            sort_order: i.sort_order ?? i.display_order ?? 0,
+          }));
+        }
+      } catch (e) {
+        console.warn('Supabase getIndicators error:', e);
+      }
     }
     const all = this.get<Indicator[]>(STORAGE_KEYS.INDICATORS, SEED_INDICATORS);
     return all
@@ -489,6 +596,38 @@ class LocalDataStore {
   public async saveIndicator(param1: string | Partial<Indicator>, param2?: Partial<Indicator>): Promise<Indicator> {
     const siteId = typeof param1 === 'string' ? param1 : param1.site_id!;
     const item = typeof param1 === 'object' ? param1 : (param2 || {});
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const payload: any = {
+          site_id: siteId,
+          title: item.title || 'Métrica',
+          value: item.value || '100+',
+          description: item.description || null,
+          icon: item.icon || 'TrendingUp',
+          sort_order: item.display_order ?? item.sort_order ?? 0,
+          is_active: item.is_active !== undefined ? item.is_active : true,
+        };
+        if (item.id && isValidUUID(item.id)) {
+          payload.id = item.id;
+        }
+
+        const { data, error } = await supabase
+          .from('indicators')
+          .upsert(payload)
+          .select()
+          .single();
+
+        if (!error && data) {
+          return {
+            ...data,
+            display_order: data.sort_order,
+          };
+        }
+      } catch (e) {
+        console.warn('Supabase saveIndicator error:', e);
+      }
+    }
 
     const all = this.get<Indicator[]>(STORAGE_KEYS.INDICATORS, SEED_INDICATORS);
     if (item.id) {
@@ -519,6 +658,13 @@ class LocalDataStore {
   public updateIndicator = (item: Partial<Indicator>) => this.saveIndicator(item);
 
   public async deleteIndicator(id: string): Promise<void> {
+    if (isSupabaseConfigured && supabase && isValidUUID(id)) {
+      try {
+        await supabase.from('indicators').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Supabase deleteIndicator error:', e);
+      }
+    }
     const all = this.get<Indicator[]>(STORAGE_KEYS.INDICATORS, SEED_INDICATORS);
     this.set(STORAGE_KEYS.INDICATORS, all.filter(i => i.id !== id));
   }
@@ -526,15 +672,19 @@ class LocalDataStore {
   // ===================== ABOUT SECTION =====================
   public async getAbout(siteId: string): Promise<AboutSection> {
     if (isSupabaseConfigured && supabase) {
-      const { data } = await supabase.from('about').select('*').eq('site_id', siteId).single();
-      if (data) return data;
+      try {
+        const { data, error } = await supabase.from('about').select('*').eq('site_id', siteId).single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.warn('Supabase getAbout error:', e);
+      }
     }
     const all = this.get<Record<string, AboutSection>>(STORAGE_KEYS.ABOUT, SEED_ABOUT);
     return all[siteId] || {
       site_id: siteId,
       title: 'Sobre Nossa História',
       biography: 'Biografia institucional e compromissos do candidato.',
-      trajectory: 'Histórico de lutas e realizações.',
+      trajectory: 'Histórico de lutas e realizações no Acre.',
       quote: 'Nosso compromisso é com o povo.',
       is_active: true,
     };
@@ -545,9 +695,23 @@ class LocalDataStore {
     const about = typeof param1 === 'object' ? param1 : (param2 || {});
 
     if (isSupabaseConfigured && supabase) {
-      const { data } = await supabase.from('about').upsert({ ...about, site_id: siteId }).select().single();
-      if (data) return data;
+      try {
+        const { data, error } = await supabase
+          .from('about')
+          .upsert({ ...about, site_id: siteId }, { onConflict: 'site_id' })
+          .select()
+          .single();
+        if (!error && data) {
+          const all = this.get<Record<string, AboutSection>>(STORAGE_KEYS.ABOUT, SEED_ABOUT);
+          all[siteId] = data;
+          this.set(STORAGE_KEYS.ABOUT, all);
+          return data;
+        }
+      } catch (e) {
+        console.warn('Supabase updateAbout error:', e);
+      }
     }
+
     const all = this.get<Record<string, AboutSection>>(STORAGE_KEYS.ABOUT, SEED_ABOUT);
     const current = all[siteId] || {
       site_id: siteId,
@@ -567,6 +731,22 @@ class LocalDataStore {
 
   // ===================== PROPOSALS & CATEGORIES =====================
   public async getProposalCategories(siteId: string, onlyActive = false): Promise<ProposalCategory[]> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase.from('proposal_categories').select('*').eq('site_id', siteId);
+        if (onlyActive) query = query.eq('is_active', true);
+        const { data, error } = await query.order('sort_order', { ascending: true });
+        if (!error && data && data.length > 0) {
+          return data.map(c => ({
+            ...c,
+            display_order: c.display_order ?? c.sort_order ?? 0,
+            sort_order: c.sort_order ?? c.display_order ?? 0,
+          }));
+        }
+      } catch (e) {
+        console.warn('Supabase getProposalCategories error:', e);
+      }
+    }
     const all = this.get<ProposalCategory[]>(STORAGE_KEYS.PROPOSAL_CATEGORIES, SEED_PROPOSAL_CATEGORIES);
     return all
       .filter(c => c.site_id === siteId && (!onlyActive || c.is_active))
@@ -576,6 +756,36 @@ class LocalDataStore {
   public async saveProposalCategory(param1: string | Partial<ProposalCategory>, param2?: Partial<ProposalCategory>): Promise<ProposalCategory> {
     const siteId = typeof param1 === 'string' ? param1 : param1.site_id!;
     const cat = typeof param1 === 'object' ? param1 : (param2 || {});
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const payload: any = {
+          site_id: siteId,
+          name: cat.name || 'Nova Categoria',
+          slug: cat.slug || cat.name?.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'categoria',
+          sort_order: cat.display_order ?? cat.sort_order ?? 0,
+          is_active: cat.is_active !== undefined ? cat.is_active : true,
+        };
+        if (cat.id && isValidUUID(cat.id)) {
+          payload.id = cat.id;
+        }
+
+        const { data, error } = await supabase
+          .from('proposal_categories')
+          .upsert(payload)
+          .select()
+          .single();
+
+        if (!error && data) {
+          return {
+            ...data,
+            display_order: data.sort_order,
+          };
+        }
+      } catch (e) {
+        console.warn('Supabase saveProposalCategory error:', e);
+      }
+    }
 
     const all = this.get<ProposalCategory[]>(STORAGE_KEYS.PROPOSAL_CATEGORIES, SEED_PROPOSAL_CATEGORIES);
     if (cat.id) {
@@ -601,11 +811,36 @@ class LocalDataStore {
   public createProposalCategory = (item: Partial<ProposalCategory>) => this.saveProposalCategory(item);
 
   public async deleteProposalCategory(id: string): Promise<void> {
+    if (isSupabaseConfigured && supabase && isValidUUID(id)) {
+      try {
+        await supabase.from('proposal_categories').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Supabase deleteProposalCategory error:', e);
+      }
+    }
     const all = this.get<ProposalCategory[]>(STORAGE_KEYS.PROPOSAL_CATEGORIES, SEED_PROPOSAL_CATEGORIES);
     this.set(STORAGE_KEYS.PROPOSAL_CATEGORIES, all.filter(c => c.id !== id));
   }
 
   public async getProposals(siteId: string, onlyPublished = false): Promise<Proposal[]> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase.from('proposals').select('*, category:proposal_categories(*)').eq('site_id', siteId);
+        if (onlyPublished) query = query.eq('is_published', true);
+        const { data, error } = await query.order('sort_order', { ascending: true });
+        if (!error && data && data.length > 0) {
+          return data.map(p => ({
+            ...p,
+            display_order: p.display_order ?? p.sort_order ?? 0,
+            sort_order: p.sort_order ?? p.display_order ?? 0,
+            is_active: p.is_active ?? p.is_published ?? true,
+            is_published: p.is_published ?? p.is_active ?? true,
+          }));
+        }
+      } catch (e) {
+        console.warn('Supabase getProposals error:', e);
+      }
+    }
     const all = this.get<Proposal[]>(STORAGE_KEYS.PROPOSALS, SEED_PROPOSALS);
     const categories = await this.getProposalCategories(siteId);
     return all
@@ -620,6 +855,40 @@ class LocalDataStore {
   public async saveProposal(param1: string | Partial<Proposal>, param2?: Partial<Proposal>): Promise<Proposal> {
     const siteId = typeof param1 === 'string' ? param1 : param1.site_id!;
     const item = typeof param1 === 'object' ? param1 : (param2 || {});
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const payload: any = {
+          site_id: siteId,
+          title: item.title || '',
+          description: item.description || '',
+          category_id: item.category_id && isValidUUID(item.category_id) ? item.category_id : null,
+          image_url: item.image_url || null,
+          icon: item.icon || 'FileText',
+          sort_order: item.display_order ?? item.sort_order ?? 0,
+          is_published: item.is_active !== undefined ? item.is_active : (item.is_published !== undefined ? item.is_published : true),
+        };
+        if (item.id && isValidUUID(item.id)) {
+          payload.id = item.id;
+        }
+
+        const { data, error } = await supabase
+          .from('proposals')
+          .upsert(payload)
+          .select('*, category:proposal_categories(*)')
+          .single();
+
+        if (!error && data) {
+          return {
+            ...data,
+            display_order: data.sort_order,
+            is_active: data.is_published,
+          };
+        }
+      } catch (e) {
+        console.warn('Supabase saveProposal error:', e);
+      }
+    }
 
     const all = this.get<Proposal[]>(STORAGE_KEYS.PROPOSALS, SEED_PROPOSALS);
     if (item.id) {
@@ -640,6 +909,7 @@ class LocalDataStore {
       icon: item.icon || 'FileText',
       display_order: item.display_order || item.sort_order || all.filter(p => p.site_id === siteId).length + 1,
       is_active: item.is_active !== undefined ? item.is_active : true,
+      is_published: item.is_published !== undefined ? item.is_published : true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -652,12 +922,35 @@ class LocalDataStore {
   public updateProposal = (item: Partial<Proposal>) => this.saveProposal(item);
 
   public async deleteProposal(id: string): Promise<void> {
+    if (isSupabaseConfigured && supabase && isValidUUID(id)) {
+      try {
+        await supabase.from('proposals').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Supabase deleteProposal error:', e);
+      }
+    }
     const all = this.get<Proposal[]>(STORAGE_KEYS.PROPOSALS, SEED_PROPOSALS);
     this.set(STORAGE_KEYS.PROPOSALS, all.filter(p => p.id !== id));
   }
 
   // ===================== ACTIONS =====================
   public async getActions(siteId: string, onlyPublished = false): Promise<ActionItem[]> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase.from('actions').select('*').eq('site_id', siteId);
+        if (onlyPublished) query = query.eq('is_published', true);
+        const { data, error } = await query.order('date', { ascending: false });
+        if (!error && data && data.length > 0) {
+          return data.map(a => ({
+            ...a,
+            is_active: a.is_active ?? a.is_published ?? true,
+            is_published: a.is_published ?? a.is_active ?? true,
+          }));
+        }
+      } catch (e) {
+        console.warn('Supabase getActions error:', e);
+      }
+    }
     const all = this.get<ActionItem[]>(STORAGE_KEYS.ACTIONS, SEED_ACTIONS);
     return all
       .filter(a => a.site_id === siteId && (!onlyPublished || a.is_active !== false))
@@ -667,6 +960,41 @@ class LocalDataStore {
   public async saveAction(param1: string | Partial<ActionItem>, param2?: Partial<ActionItem>): Promise<ActionItem> {
     const siteId = typeof param1 === 'string' ? param1 : param1.site_id!;
     const item = typeof param1 === 'object' ? param1 : (param2 || {});
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const payload: any = {
+          site_id: siteId,
+          title: item.title || '',
+          description: item.description || '',
+          category: item.category || 'Infraestrutura',
+          date: item.date || new Date().toISOString().split('T')[0],
+          municipality: item.municipality || 'Rio Branco',
+          image_url: item.image_url || null,
+          video_url: item.video_url || null,
+          external_url: item.external_url || null,
+          is_published: item.is_active !== undefined ? item.is_active : (item.is_published !== undefined ? item.is_published : true),
+        };
+        if (item.id && isValidUUID(item.id)) {
+          payload.id = item.id;
+        }
+
+        const { data, error } = await supabase
+          .from('actions')
+          .upsert(payload)
+          .select()
+          .single();
+
+        if (!error && data) {
+          return {
+            ...data,
+            is_active: data.is_published,
+          };
+        }
+      } catch (e) {
+        console.warn('Supabase saveAction error:', e);
+      }
+    }
 
     const all = this.get<ActionItem[]>(STORAGE_KEYS.ACTIONS, SEED_ACTIONS);
     if (item.id) {
@@ -684,7 +1012,7 @@ class LocalDataStore {
       description: item.description || '',
       category: item.category || 'Infraestrutura',
       date: item.date || new Date().toISOString().split('T')[0],
-      municipality: item.municipality || 'São Paulo',
+      municipality: item.municipality || 'Rio Branco',
       image_url: item.image_url,
       video_url: item.video_url,
       external_url: item.external_url,
@@ -701,12 +1029,35 @@ class LocalDataStore {
   public updateAction = (item: Partial<ActionItem>) => this.saveAction(item);
 
   public async deleteAction(id: string): Promise<void> {
+    if (isSupabaseConfigured && supabase && isValidUUID(id)) {
+      try {
+        await supabase.from('actions').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Supabase deleteAction error:', e);
+      }
+    }
     const all = this.get<ActionItem[]>(STORAGE_KEYS.ACTIONS, SEED_ACTIONS);
     this.set(STORAGE_KEYS.ACTIONS, all.filter(a => a.id !== id));
   }
 
   // ===================== EVENTS =====================
   public async getEvents(siteId: string, onlyPublished = false): Promise<CampaignEvent[]> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase.from('events').select('*').eq('site_id', siteId);
+        if (onlyPublished) query = query.eq('is_published', true);
+        const { data, error } = await query.order('event_date', { ascending: true });
+        if (!error && data && data.length > 0) {
+          return data.map(e => ({
+            ...e,
+            is_active: e.is_active ?? e.is_published ?? true,
+            is_published: e.is_published ?? e.is_active ?? true,
+          }));
+        }
+      } catch (e) {
+        console.warn('Supabase getEvents error:', e);
+      }
+    }
     const all = this.get<CampaignEvent[]>(STORAGE_KEYS.EVENTS, SEED_EVENTS);
     return all
       .filter(e => e.site_id === siteId && (!onlyPublished || e.is_active !== false))
@@ -716,6 +1067,41 @@ class LocalDataStore {
   public async saveEvent(param1: string | Partial<CampaignEvent>, param2?: Partial<CampaignEvent>): Promise<CampaignEvent> {
     const siteId = typeof param1 === 'string' ? param1 : param1.site_id!;
     const item = typeof param1 === 'object' ? param1 : (param2 || {});
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const payload: any = {
+          site_id: siteId,
+          title: item.title || '',
+          event_date: item.event_date || new Date().toISOString().split('T')[0],
+          event_time: item.event_time || '19:00',
+          municipality: item.municipality || 'Rio Branco',
+          location: item.location || 'Comitê Central',
+          description: item.description || null,
+          image_url: item.image_url || null,
+          map_url: item.map_url || null,
+          is_published: item.is_active !== undefined ? item.is_active : (item.is_published !== undefined ? item.is_published : true),
+        };
+        if (item.id && isValidUUID(item.id)) {
+          payload.id = item.id;
+        }
+
+        const { data, error } = await supabase
+          .from('events')
+          .upsert(payload)
+          .select()
+          .single();
+
+        if (!error && data) {
+          return {
+            ...data,
+            is_active: data.is_published,
+          };
+        }
+      } catch (e) {
+        console.warn('Supabase saveEvent error:', e);
+      }
+    }
 
     const all = this.get<CampaignEvent[]>(STORAGE_KEYS.EVENTS, SEED_EVENTS);
     if (item.id) {
@@ -732,7 +1118,7 @@ class LocalDataStore {
       title: item.title || '',
       event_date: item.event_date || new Date().toISOString().split('T')[0],
       event_time: item.event_time || '19:00',
-      municipality: item.municipality || 'São Paulo',
+      municipality: item.municipality || 'Rio Branco',
       location: item.location || 'Comitê Central',
       description: item.description,
       image_url: item.image_url,
@@ -750,12 +1136,29 @@ class LocalDataStore {
   public updateEvent = (item: Partial<CampaignEvent>) => this.saveEvent(item);
 
   public async deleteEvent(id: string): Promise<void> {
+    if (isSupabaseConfigured && supabase && isValidUUID(id)) {
+      try {
+        await supabase.from('events').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Supabase deleteEvent error:', e);
+      }
+    }
     const all = this.get<CampaignEvent[]>(STORAGE_KEYS.EVENTS, SEED_EVENTS);
     this.set(STORAGE_KEYS.EVENTS, all.filter(e => e.id !== id));
   }
 
   // ===================== NEWS =====================
   public async getNews(siteId: string, onlyPublished = false): Promise<NewsArticle[]> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase.from('news').select('*').eq('site_id', siteId);
+        if (onlyPublished) query = query.eq('is_published', true);
+        const { data, error } = await query.order('published_at', { ascending: false });
+        if (!error && data && data.length > 0) return data;
+      } catch (e) {
+        console.warn('Supabase getNews error:', e);
+      }
+    }
     const all = this.get<NewsArticle[]>(STORAGE_KEYS.NEWS, SEED_NEWS);
     return all
       .filter(n => n.site_id === siteId && (!onlyPublished || n.is_published))
@@ -763,6 +1166,19 @@ class LocalDataStore {
   }
 
   public async getNewsBySlug(siteId: string, slug: string): Promise<NewsArticle | null> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('news')
+          .select('*')
+          .eq('site_id', siteId)
+          .eq('slug', slug)
+          .single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.warn('Supabase getNewsBySlug error:', e);
+      }
+    }
     const all = await this.getNews(siteId);
     return all.find(n => n.slug === slug || n.id === slug) || null;
   }
@@ -771,9 +1187,39 @@ class LocalDataStore {
     const siteId = typeof param1 === 'string' ? param1 : param1.site_id!;
     const item = typeof param1 === 'object' ? param1 : (param2 || {});
 
-    const all = this.get<NewsArticle[]>(STORAGE_KEYS.NEWS, SEED_NEWS);
     const slug = item.slug || (item.title ? item.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : `noticia-${Date.now()}`);
 
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const payload: any = {
+          site_id: siteId,
+          title: item.title || '',
+          slug,
+          summary: item.summary || null,
+          content: item.content || '',
+          image_url: item.image_url || null,
+          category: item.category || 'Geral',
+          author: item.author || 'Assessoria de Comunicação',
+          published_at: item.published_at || new Date().toISOString().split('T')[0],
+          is_published: item.is_published !== undefined ? item.is_published : true,
+        };
+        if (item.id && isValidUUID(item.id)) {
+          payload.id = item.id;
+        }
+
+        const { data, error } = await supabase
+          .from('news')
+          .upsert(payload)
+          .select()
+          .single();
+
+        if (!error && data) return data;
+      } catch (e) {
+        console.warn('Supabase saveNews error:', e);
+      }
+    }
+
+    const all = this.get<NewsArticle[]>(STORAGE_KEYS.NEWS, SEED_NEWS);
     if (item.id) {
       const idx = all.findIndex(n => n.id === item.id);
       if (idx !== -1) {
@@ -806,12 +1252,35 @@ class LocalDataStore {
   public updateNews = (item: Partial<NewsArticle>) => this.saveNews(item);
 
   public async deleteNews(id: string): Promise<void> {
+    if (isSupabaseConfigured && supabase && isValidUUID(id)) {
+      try {
+        await supabase.from('news').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Supabase deleteNews error:', e);
+      }
+    }
     const all = this.get<NewsArticle[]>(STORAGE_KEYS.NEWS, SEED_NEWS);
     this.set(STORAGE_KEYS.NEWS, all.filter(n => n.id !== id));
   }
 
   // ===================== VIDEOS =====================
   public async getVideos(siteId: string, onlyActive = false): Promise<VideoItem[]> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase.from('videos').select('*').eq('site_id', siteId);
+        if (onlyActive) query = query.eq('is_active', true);
+        const { data, error } = await query.order('sort_order', { ascending: true });
+        if (!error && data && data.length > 0) {
+          return data.map(v => ({
+            ...v,
+            display_order: v.display_order ?? v.sort_order ?? 0,
+            sort_order: v.sort_order ?? v.display_order ?? 0,
+          }));
+        }
+      } catch (e) {
+        console.warn('Supabase getVideos error:', e);
+      }
+    }
     const all = this.get<VideoItem[]>(STORAGE_KEYS.VIDEOS, SEED_VIDEOS);
     return all
       .filter(v => v.site_id === siteId && (!onlyActive || v.is_active))
@@ -821,6 +1290,39 @@ class LocalDataStore {
   public async saveVideo(param1: string | Partial<VideoItem>, param2?: Partial<VideoItem>): Promise<VideoItem> {
     const siteId = typeof param1 === 'string' ? param1 : param1.site_id!;
     const item = typeof param1 === 'object' ? param1 : (param2 || {});
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const payload: any = {
+          site_id: siteId,
+          title: item.title || '',
+          description: item.description || null,
+          youtube_url: item.youtube_url || '',
+          thumbnail_url: item.thumbnail_url || null,
+          category: item.category || 'Pronunciamento',
+          sort_order: item.display_order ?? item.sort_order ?? 0,
+          is_active: item.is_active !== undefined ? item.is_active : true,
+        };
+        if (item.id && isValidUUID(item.id)) {
+          payload.id = item.id;
+        }
+
+        const { data, error } = await supabase
+          .from('videos')
+          .upsert(payload)
+          .select()
+          .single();
+
+        if (!error && data) {
+          return {
+            ...data,
+            display_order: data.sort_order,
+          };
+        }
+      } catch (e) {
+        console.warn('Supabase saveVideo error:', e);
+      }
+    }
 
     const all = this.get<VideoItem[]>(STORAGE_KEYS.VIDEOS, SEED_VIDEOS);
     if (item.id) {
@@ -852,12 +1354,35 @@ class LocalDataStore {
   public updateVideo = (item: Partial<VideoItem>) => this.saveVideo(item);
 
   public async deleteVideo(id: string): Promise<void> {
+    if (isSupabaseConfigured && supabase && isValidUUID(id)) {
+      try {
+        await supabase.from('videos').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Supabase deleteVideo error:', e);
+      }
+    }
     const all = this.get<VideoItem[]>(STORAGE_KEYS.VIDEOS, SEED_VIDEOS);
     this.set(STORAGE_KEYS.VIDEOS, all.filter(v => v.id !== id));
   }
 
   // ===================== GALLERY =====================
   public async getGallery(siteId: string, onlyActive = false): Promise<GalleryItem[]> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase.from('gallery').select('*').eq('site_id', siteId);
+        if (onlyActive) query = query.eq('is_active', true);
+        const { data, error } = await query.order('sort_order', { ascending: true });
+        if (!error && data && data.length > 0) {
+          return data.map(g => ({
+            ...g,
+            display_order: g.display_order ?? g.sort_order ?? 0,
+            sort_order: g.sort_order ?? g.display_order ?? 0,
+          }));
+        }
+      } catch (e) {
+        console.warn('Supabase getGallery error:', e);
+      }
+    }
     const all = this.get<GalleryItem[]>(STORAGE_KEYS.GALLERY, SEED_GALLERY);
     return all
       .filter(g => g.site_id === siteId && (!onlyActive || g.is_active))
@@ -867,6 +1392,37 @@ class LocalDataStore {
   public async saveGalleryItem(param1: string | Partial<GalleryItem>, param2?: Partial<GalleryItem>): Promise<GalleryItem> {
     const siteId = typeof param1 === 'string' ? param1 : param1.site_id!;
     const item = typeof param1 === 'object' ? param1 : (param2 || {});
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const payload: any = {
+          site_id: siteId,
+          image_url: item.image_url || '',
+          caption: item.caption || null,
+          storage_path: item.storage_path || null,
+          sort_order: item.display_order ?? item.sort_order ?? 0,
+          is_active: item.is_active !== undefined ? item.is_active : true,
+        };
+        if (item.id && isValidUUID(item.id)) {
+          payload.id = item.id;
+        }
+
+        const { data, error } = await supabase
+          .from('gallery')
+          .upsert(payload)
+          .select()
+          .single();
+
+        if (!error && data) {
+          return {
+            ...data,
+            display_order: data.sort_order,
+          };
+        }
+      } catch (e) {
+        console.warn('Supabase saveGalleryItem error:', e);
+      }
+    }
 
     const all = this.get<GalleryItem[]>(STORAGE_KEYS.GALLERY, SEED_GALLERY);
     if (item.id) {
@@ -896,12 +1452,35 @@ class LocalDataStore {
   public updateGalleryItem = (item: Partial<GalleryItem>) => this.saveGalleryItem(item);
 
   public async deleteGalleryItem(id: string): Promise<void> {
+    if (isSupabaseConfigured && supabase && isValidUUID(id)) {
+      try {
+        await supabase.from('gallery').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Supabase deleteGalleryItem error:', e);
+      }
+    }
     const all = this.get<GalleryItem[]>(STORAGE_KEYS.GALLERY, SEED_GALLERY);
     this.set(STORAGE_KEYS.GALLERY, all.filter(g => g.id !== id));
   }
 
   // ===================== SOCIAL LINKS =====================
   public async getSocialLinks(siteId: string, onlyActive = false): Promise<SocialLink[]> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase.from('social_links').select('*').eq('site_id', siteId);
+        if (onlyActive) query = query.eq('is_active', true);
+        const { data, error } = await query.order('sort_order', { ascending: true });
+        if (!error && data && data.length > 0) {
+          return data.map(s => ({
+            ...s,
+            display_order: s.display_order ?? s.sort_order ?? 0,
+            sort_order: s.sort_order ?? s.display_order ?? 0,
+          }));
+        }
+      } catch (e) {
+        console.warn('Supabase getSocialLinks error:', e);
+      }
+    }
     const all = this.get<SocialLink[]>(STORAGE_KEYS.SOCIAL_LINKS, SEED_SOCIAL_LINKS);
     return all
       .filter(s => s.site_id === siteId && (!onlyActive || s.is_active))
@@ -911,6 +1490,37 @@ class LocalDataStore {
   public async saveSocialLink(param1: string | Partial<SocialLink>, param2?: Partial<SocialLink>): Promise<SocialLink> {
     const siteId = typeof param1 === 'string' ? param1 : param1.site_id!;
     const item = typeof param1 === 'object' ? param1 : (param2 || {});
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const payload: any = {
+          site_id: siteId,
+          platform: item.platform || 'instagram',
+          url: item.url || '',
+          icon: item.icon || null,
+          sort_order: item.display_order ?? item.sort_order ?? 0,
+          is_active: item.is_active !== undefined ? item.is_active : true,
+        };
+        if (item.id && isValidUUID(item.id)) {
+          payload.id = item.id;
+        }
+
+        const { data, error } = await supabase
+          .from('social_links')
+          .upsert(payload)
+          .select()
+          .single();
+
+        if (!error && data) {
+          return {
+            ...data,
+            display_order: data.sort_order,
+          };
+        }
+      } catch (e) {
+        console.warn('Supabase saveSocialLink error:', e);
+      }
+    }
 
     const all = this.get<SocialLink[]>(STORAGE_KEYS.SOCIAL_LINKS, SEED_SOCIAL_LINKS);
     if (item.id) {
@@ -941,21 +1551,36 @@ class LocalDataStore {
   public updateSocialLink = (item: Partial<SocialLink>) => this.saveSocialLink(item);
 
   public async deleteSocialLink(id: string): Promise<void> {
+    if (isSupabaseConfigured && supabase && isValidUUID(id)) {
+      try {
+        await supabase.from('social_links').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Supabase deleteSocialLink error:', e);
+      }
+    }
     const all = this.get<SocialLink[]>(STORAGE_KEYS.SOCIAL_LINKS, SEED_SOCIAL_LINKS);
     this.set(STORAGE_KEYS.SOCIAL_LINKS, all.filter(s => s.id !== id));
   }
 
   // ===================== CONTACT SETTINGS =====================
   public async getContactSettings(siteId: string): Promise<ContactSettings> {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data, error } = await supabase.from('contact_settings').select('*').eq('site_id', siteId).single();
+        if (!error && data) return data;
+      } catch (e) {
+        console.warn('Supabase getContactSettings error:', e);
+      }
+    }
     const all = this.get<Record<string, ContactSettings>>(STORAGE_KEYS.CONTACT_SETTINGS, SEED_CONTACT_SETTINGS);
     return all[siteId] || {
       site_id: siteId,
-      whatsapp: '(11) 99999-9999',
-      email: 'contato@campanha.com.br',
-      phone: '(11) 3333-3333',
-      address: 'Rua Principal, 100 - Centro',
-      city: 'São Paulo',
-      state: 'SP',
+      whatsapp: '(68) 99999-9999',
+      email: 'contato@neyamorim.com.br',
+      phone: '(68) 3222-0000',
+      address: 'Rio Branco - AC',
+      city: 'Rio Branco',
+      state: 'AC',
     };
   }
 
@@ -963,11 +1588,29 @@ class LocalDataStore {
     const siteId = typeof param1 === 'string' ? param1 : param1.site_id!;
     const contact = typeof param1 === 'object' ? param1 : (param2 || {});
 
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('contact_settings')
+          .upsert({ ...contact, site_id: siteId }, { onConflict: 'site_id' })
+          .select()
+          .single();
+        if (!error && data) {
+          const all = this.get<Record<string, ContactSettings>>(STORAGE_KEYS.CONTACT_SETTINGS, SEED_CONTACT_SETTINGS);
+          all[siteId] = data;
+          this.set(STORAGE_KEYS.CONTACT_SETTINGS, all);
+          return data;
+        }
+      } catch (e) {
+        console.warn('Supabase updateContactSettings error:', e);
+      }
+    }
+
     const all = this.get<Record<string, ContactSettings>>(STORAGE_KEYS.CONTACT_SETTINGS, SEED_CONTACT_SETTINGS);
     const current = all[siteId] || {
       site_id: siteId,
-      whatsapp: '(11) 99999-9999',
-      email: 'contato@campanha.com.br',
+      whatsapp: '(68) 99999-9999',
+      email: 'contato@neyamorim.com.br',
     };
     all[siteId] = {
       ...current,

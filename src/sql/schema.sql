@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS public.hero (
     candidate_name VARCHAR(255) NOT NULL,
     position VARCHAR(255) NOT NULL,
     image_url TEXT,
+    background_video_url TEXT,
     primary_button_text VARCHAR(100) DEFAULT 'Conheça as Propostas',
     primary_button_url VARCHAR(255) DEFAULT '/propostas',
     secondary_button_text VARCHAR(100) DEFAULT 'Fale no WhatsApp',
@@ -435,10 +436,5 @@ WITH CHECK (
   auth.role() = 'authenticated'
 );
 
--- Delete restrito a membros autorizados
-CREATE POLICY "Members Delete Campaign Assets"
-ON storage.objects FOR DELETE
-USING (
-  bucket_id = 'campaign-assets' AND
-  auth.role() = 'authenticated'
-);
+-- Gaurantee migration of background_video_url if table already existed
+ALTER TABLE public.hero ADD COLUMN IF NOT EXISTS background_video_url TEXT;
