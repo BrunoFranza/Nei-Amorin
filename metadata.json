@@ -1,0 +1,6 @@
+{
+  "name": "Ney Amorim — Deputado Federal",
+  "description": "Plataforma oficial de presença digital e campanha eleitoral de Ney Amorim (MDB 1577 — Acre).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
