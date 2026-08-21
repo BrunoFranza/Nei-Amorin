@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Sparkles, Save, CheckCircle, Image as ImageIcon } from 'lucide-react';
+import { Sparkles, Save, CheckCircle, Image as ImageIcon, Video } from 'lucide-react';
 import { useTenant } from '../../context/TenantContext';
 import { dataStore } from '../../services/data-store';
 import { HeroSection } from '../../types';
 import { ImageUploader } from '../../components/common/ImageUploader';
+import { VideoUploader } from '../../components/common/VideoUploader';
 
 export const AdminHeroPage: React.FC = () => {
   const { currentSite, themeSettings } = useTenant();
@@ -56,7 +57,7 @@ export const AdminHeroPage: React.FC = () => {
             Candidato & Seção Hero
           </h1>
           <p className="text-xs sm:text-sm text-slate-600">
-            Configure a foto oficial principal, títulos de destaque, slogan e botões de chamada para ação (CTAs).
+            Envie o arquivo de vídeo do seu computador (MP4/WebM), foto oficial de destaque, slogan e botões de ação.
           </p>
         </div>
 
@@ -181,7 +182,7 @@ export const AdminHeroPage: React.FC = () => {
             <button
               type="submit"
               disabled={saving}
-              className="px-6 py-2.5 text-sm font-bold text-white rounded-xl shadow-xs hover:shadow transition-all flex items-center gap-2 disabled:opacity-50"
+              className="px-6 py-2.5 text-sm font-bold text-white rounded-xl shadow-xs hover:shadow transition-all flex items-center gap-2 disabled:opacity-50 cursor-pointer"
               style={{ backgroundColor: primaryColor }}
             >
               <Save className="w-4 h-4" />
@@ -190,38 +191,43 @@ export const AdminHeroPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: Hero Image Upload & Storage */}
+        {/* Right Column: Hero Video & Image */}
         <div className="lg:col-span-5 space-y-6">
+          {/* Video Section with Direct File Upload & Drag and Drop */}
+          <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Video className="w-4 h-4 text-emerald-600" />
+                <span>Vídeo de Fundo do Topo</span>
+              </h3>
+              <span className="text-[10px] uppercase font-extrabold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
+                Upload Direto
+              </span>
+            </div>
+
+            <VideoUploader
+              currentVideoUrl={hero.background_video_url}
+              folder="videos"
+              label="Arquivo de Vídeo (.mp4)"
+              description="Arraste o arquivo de vídeo do seu computador ou clique para selecionar. Aceita MP4, WebM ou link."
+              onUploadSuccess={(url) => setHero({ ...hero, background_video_url: url })}
+            />
+          </div>
+
+          {/* Photo Section */}
           <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
             <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
               <ImageIcon className="w-4 h-4 text-sky-600" />
-              <span>Foto Oficial do Hero (Supabase Storage)</span>
+              <span>Foto Oficial do Candidato</span>
             </h3>
             <p className="text-xs text-slate-500">
-              Recomendamos uma foto em alta definição com enquadramento vertical ou de meio-corpo.
+              Foto oficial para exibição no perfil, biografia e materiais institucionais.
             </p>
 
             <ImageUploader
               currentImageUrl={hero.image_url}
               folder="hero"
               onUploadSuccess={(url) => setHero({ ...hero, image_url: url })}
-            />
-          </div>
-
-          <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
-            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-emerald-600" />
-              <span>Vídeo de Fundo no Hero (Loop Silencioso)</span>
-            </h3>
-            <p className="text-xs text-slate-500">
-              Caminho local (ex: <code className="text-sky-600 font-mono">/hero.mp4</code>) ou link direto de vídeo MP4 em nuvem.
-            </p>
-            <input
-              type="text"
-              placeholder="/hero.mp4"
-              value={hero.background_video_url || ''}
-              onChange={(e) => setHero({ ...hero, background_video_url: e.target.value })}
-              className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white font-mono"
             />
           </div>
         </div>

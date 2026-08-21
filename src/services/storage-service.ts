@@ -1,6 +1,6 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
-export type StorageFolder = 'hero' | 'about' | 'logos' | 'news' | 'proposals' | 'gallery' | 'actions' | string;
+export type StorageFolder = 'hero' | 'about' | 'logos' | 'news' | 'proposals' | 'gallery' | 'actions' | 'videos' | string;
 
 export interface UploadResult {
   url: string;
@@ -167,6 +167,65 @@ export async function uploadCampaignImage(
     reader.onerror = (error) => {
       reject(error);
     };
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Uploads a video file directly (MP4, WebM, MOV) either to Supabase Storage or creates an object/data URL
+ */
+export async function uploadCampaignVideo(
+  siteId: string,
+  folder: StorageFolder,
+  file: File
+): Promise<UploadResult> {
+  const cleanSiteId = siteId || 'default-site';
+  const fileExt = file.name.split('.').pop() || 'mp4';
+  const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${fileExt}`;
+  const filePath = `${cleanSiteId}/${folder}/${fileName}`;
+
+  // 1. If Supabase is configured, upload to bucket 'campaign-assets'
+  if (isSupabaseConfigured && supabase) {
+    try {
+      const { data, error } = await supabase.storage
+        .from('campaign-assets')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: true,
+          contentType: file.type || 'video/mp4',
+        });
+
+      if (!error && data) {
+        const { data: publicUrlData } = supabase.storage
+          .from('campaign-assets')
+          .getPublicUrl(filePath);
+
+        return {
+          url: publicUrlData.publicUrl,
+          path: filePath,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+        };
+      }
+    } catch (e) {
+      console.warn('Supabase video upload error, falling back to local storage:', e);
+    }
+  }
+
+  // 2. Local fallback using FileReader / Data URL
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve({
+        url: reader.result as string,
+        path: filePath,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      });
+    };
+    reader.onerror = reject;
     reader.readAsDataURL(file);
   });
 }
