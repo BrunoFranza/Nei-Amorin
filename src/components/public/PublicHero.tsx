@@ -1,8 +1,9 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, MessageCircle, Sparkles } from 'lucide-react';
 import { HeroSection } from '../../types';
 import { useTenant } from '../../context/TenantContext';
+import { resolveMediaUrl } from '../../services/storage-service';
 
 interface PublicHeroProps {
   hero: HeroSection;
@@ -26,6 +27,7 @@ function getVimeoId(url: string): string | null {
 export const PublicHero: React.FC<PublicHeroProps> = ({ hero }) => {
   const { siteSettings, themeSettings } = useTenant();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [resolvedSrc, setResolvedSrc] = useState<string>('/hero.mp4');
 
   const primaryColor = themeSettings?.primary_color || '#1a6b3a';
   const secondaryColor = themeSettings?.secondary_color || '#0d2b4e';
@@ -39,6 +41,20 @@ export const PublicHero: React.FC<PublicHeroProps> = ({ hero }) => {
   const vimeoId = useMemo(() => getVimeoId(rawVideoUrl), [rawVideoUrl]);
 
   useEffect(() => {
+    let isMounted = true;
+    if (rawVideoUrl && !youtubeId && !vimeoId) {
+      resolveMediaUrl(rawVideoUrl).then((src) => {
+        if (isMounted) {
+          setResolvedSrc(src || '/hero.mp4');
+        }
+      });
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [rawVideoUrl, youtubeId, vimeoId]);
+
+  useEffect(() => {
     if (!youtubeId && !vimeoId && videoRef.current) {
       const video = videoRef.current;
       video.muted = true;
@@ -50,7 +66,7 @@ export const PublicHero: React.FC<PublicHeroProps> = ({ hero }) => {
         });
       }
     }
-  }, [rawVideoUrl, youtubeId, vimeoId]);
+  }, [resolvedSrc, youtubeId, vimeoId]);
 
   return (
     <section className="relative min-h-[580px] lg:min-h-[660px] flex items-center overflow-hidden bg-slate-950 text-white">
@@ -78,15 +94,16 @@ export const PublicHero: React.FC<PublicHeroProps> = ({ hero }) => {
       ) : (
         <video
           ref={videoRef}
+          key={resolvedSrc}
           autoPlay
           muted
           loop
           playsInline
           preload="auto"
-          src={rawVideoUrl}
+          src={resolvedSrc}
           className="absolute inset-0 w-full h-full object-cover object-center"
         >
-          <source src={rawVideoUrl} type="video/mp4" />
+          <source src={resolvedSrc} type="video/mp4" />
         </video>
       )}
 

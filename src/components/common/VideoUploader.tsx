@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, X, Video as VideoIcon, Check, Loader2, Link2, Sparkles, Play } from 'lucide-react';
-import { uploadCampaignVideo, StorageFolder } from '../../services/storage-service';
+import { Upload, X, Loader2, Link2, Play } from 'lucide-react';
+import { uploadCampaignVideo, resolveMediaUrl, StorageFolder } from '../../services/storage-service';
 import { useTenant } from '../../context/TenantContext';
 
 interface VideoUploaderProps {
@@ -17,11 +17,12 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
   folder = 'videos',
   onVideoUploaded,
   onUploadSuccess,
-  label = 'Vídeo de Fundo do Hero',
+  label = 'Vídeo de Fundo do Topo',
   description = 'Faça upload direto do arquivo (.mp4, .webm, .mov) do seu computador ou cole um link.',
 }) => {
   const { currentSite } = useTenant();
-  const [previewUrl, setPreviewUrl] = useState<string>(currentVideoUrl || '');
+  const [resolvedSrc, setResolvedSrc] = useState<string>('');
+  const [rawUrl, setRawUrl] = useState<string>(currentVideoUrl || '');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +37,18 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
   };
 
   useEffect(() => {
-    setPreviewUrl(currentVideoUrl || '');
+    setRawUrl(currentVideoUrl || '');
+    let isMounted = true;
+    if (currentVideoUrl) {
+      resolveMediaUrl(currentVideoUrl).then((src) => {
+        if (isMounted) setResolvedSrc(src);
+      });
+    } else {
+      setResolvedSrc('');
+    }
+    return () => {
+      isMounted = false;
+    };
   }, [currentVideoUrl]);
 
   const handleFileSelect = async (file: File) => {
@@ -45,9 +57,8 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
       return;
     }
 
-    // 50MB check warning for local performance
-    if (file.size > 100 * 1024 * 1024) {
-      setError('O vídeo é muito grande (máximo recomendado 100MB). Otimize ou reduza a resolução para a web.');
+    if (file.size > 150 * 1024 * 1024) {
+      setError('O vídeo é muito grande (máximo recomendado 150MB). Otimize ou reduza a resolução.');
       return;
     }
 
@@ -60,7 +71,9 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
       setUploadProgress(50);
       const result = await uploadCampaignVideo(siteId, folder, file);
       setUploadProgress(100);
-      setPreviewUrl(result.url);
+      setRawUrl(result.url);
+      const activeSrc = await resolveMediaUrl(result.url);
+      setResolvedSrc(activeSrc);
       notifyChange(result.url, result.path);
     } catch (err: any) {
       setError(err?.message || 'Falha ao processar o vídeo. Tente novamente.');
@@ -80,15 +93,18 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
 
   const handleManualUrlSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!manualUrl.trim()) return;
-    setPreviewUrl(manualUrl.trim());
-    notifyChange(manualUrl.trim());
+    const val = manualUrl.trim();
+    if (!val) return;
+    setRawUrl(val);
+    setResolvedSrc(val);
+    notifyChange(val);
     setShowUrlInput(false);
     setManualUrl('');
   };
 
   const handleRemove = () => {
-    setPreviewUrl('');
+    setRawUrl('');
+    setResolvedSrc('');
     notifyChange('');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -123,7 +139,7 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
           <button
             type="button"
             onClick={() => setError(null)}
-            className="text-red-500 hover:text-red-700 font-bold ml-2"
+            className="text-red-500 hover:text-red-700 font-bold ml-2 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -149,20 +165,22 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
       )}
 
       {/* Preview or Upload Zone */}
-      {previewUrl ? (
+      {resolvedSrc || rawUrl ? (
         <div className="relative rounded-2xl overflow-hidden border border-slate-200 bg-slate-950 shadow-xs">
           <div className="aspect-video w-full flex items-center justify-center">
-            {previewUrl.includes('youtube.com') || previewUrl.includes('youtu.be') ? (
+            {rawUrl.includes('youtube.com') || rawUrl.includes('youtu.be') ? (
               <div className="text-center p-4 text-white text-xs">
                 <Play className="w-8 h-8 text-red-500 mx-auto mb-2" />
                 <p className="font-bold">Vídeo do YouTube Vinculado</p>
-                <p className="text-slate-400 text-[11px] truncate max-w-xs mt-1">{previewUrl}</p>
+                <p className="text-slate-400 text-[11px] truncate max-w-xs mt-1">{rawUrl}</p>
               </div>
             ) : (
               <video
-                src={previewUrl}
+                key={resolvedSrc}
+                src={resolvedSrc || rawUrl}
                 controls
                 muted
+                playsInline
                 className="w-full h-full object-cover"
               />
             )}
@@ -213,10 +231,10 @@ export const VideoUploader: React.FC<VideoUploaderProps> = ({
 
           <div className="space-y-1">
             <p className="text-sm font-bold text-slate-800">
-              {isUploading ? 'Processando e enviando vídeo...' : 'Clique para selecionar o vídeo ou arraste aqui'}
+              {isUploading ? 'Processando e guardando vídeo...' : 'Clique para selecionar o vídeo ou arraste aqui'}
             </p>
             <p className="text-xs text-slate-500">
-              Formatos aceitos: <strong>MP4, WebM, MOV</strong> (Envia direto do seu PC)
+              Formatos aceitos: <strong>MP4, WebM, MOV</strong> (Sem limite do navegador)
             </p>
           </div>
 

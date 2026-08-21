@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { saveMediaBlob, getMediaBlobUrl } from './local-media-db';
 
 export type StorageFolder = 'hero' | 'about' | 'logos' | 'news' | 'proposals' | 'gallery' | 'actions' | 'videos' | string;
 
@@ -8,6 +9,20 @@ export interface UploadResult {
   name?: string;
   size?: number;
   type?: string;
+}
+
+/**
+ * Resolves any media URL (handles idb://, Supabase public URL, relative path, or external link)
+ */
+export async function resolveMediaUrl(url?: string | null): Promise<string> {
+  if (!url) return '';
+  if (url.startsWith('idb:')) {
+    const key = url.replace('idb:', '');
+    const blobUrl = await getMediaBlobUrl(key);
+    if (blobUrl) return blobUrl;
+    return '/hero.mp4'; // fallback
+  }
+  return url;
 }
 
 /**
@@ -172,7 +187,9 @@ export async function uploadCampaignImage(
 }
 
 /**
- * Uploads a video file directly (MP4, WebM, MOV) either to Supabase Storage or creates an object/data URL
+ * Uploads a video file directly (MP4, WebM, MOV).
+ * If Supabase is configured: uploads to Supabase Storage.
+ * If local: saves to IndexedDB (preventing 5MB localStorage crash) and returns an idb reference.
  */
 export async function uploadCampaignVideo(
   siteId: string,
@@ -213,21 +230,29 @@ export async function uploadCampaignVideo(
     }
   }
 
-  // 2. Local fallback using FileReader / Data URL
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      resolve({
-        url: reader.result as string,
-        path: filePath,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-      });
+  // 2. Local Fallback via IndexedDB (handles large video files up to hundreds of megabytes safely)
+  try {
+    const idbKey = `hero_video_${cleanSiteId}`;
+    await saveMediaBlob(idbKey, file);
+    return {
+      url: `idb:${idbKey}`,
+      path: filePath,
+      name: file.name,
+      size: file.size,
+      type: file.type,
     };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+  } catch (err) {
+    console.error('IndexedDB video save error:', err);
+    // Absolute fallback
+    const objUrl = URL.createObjectURL(file);
+    return {
+      url: objUrl,
+      path: filePath,
+      name: file.name,
+      size: file.size,
+      type: file.type,
+    };
+  }
 }
 
 export function getYouTubeThumbnail(url: string): string {

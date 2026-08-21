@@ -74,7 +74,21 @@ class LocalDataStore {
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {
-      console.warn('LocalStorage error:', e);
+      console.warn('LocalStorage Quota Exceeded / Error, clearing huge media strings:', e);
+      try {
+        // If hero had a massive base64 string, remove heavy fields from localStorage copy
+        if (key === STORAGE_KEYS.HERO && typeof value === 'object' && value !== null) {
+          const sanitized: any = { ...value };
+          for (const siteId in sanitized) {
+            if (sanitized[siteId]?.background_video_url?.startsWith('data:video/')) {
+              sanitized[siteId].background_video_url = `/hero.mp4`;
+            }
+          }
+          localStorage.setItem(key, JSON.stringify(sanitized));
+        }
+      } catch {
+        // Silent fallback
+      }
     }
   }
 
