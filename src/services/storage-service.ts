@@ -1,5 +1,4 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { saveMediaBlob, getMediaBlobUrl } from './local-media-db';
 
 export type StorageFolder = 'hero' | 'about' | 'logos' | 'news' | 'proposals' | 'gallery' | 'actions' | 'videos' | string;
 
@@ -12,16 +11,10 @@ export interface UploadResult {
 }
 
 /**
- * Resolves any media URL (handles idb://, Supabase public URL, relative path, or external link)
+ * Resolves any media URL
  */
 export async function resolveMediaUrl(url?: string | null): Promise<string> {
   if (!url) return '';
-  if (url.startsWith('idb:')) {
-    const key = url.replace('idb:', '');
-    const blobUrl = await getMediaBlobUrl(key);
-    if (blobUrl) return blobUrl;
-    return '/hero.mp4'; // fallback
-  }
   return url;
 }
 
@@ -151,13 +144,15 @@ export async function uploadCampaignImage(
           size: file.size,
           type: file.type,
         };
+      } else if (error) {
+        console.warn('Supabase upload returned error:', error.message);
       }
     } catch (e) {
       console.warn('Supabase storage upload failed, falling back to local data URL:', e);
     }
   }
 
-  // 3. Robust local fallback (uses compressed base64 data URL)
+  // 3. Fallback for images
   if (compressedDataUrl) {
     return {
       url: compressedDataUrl,
@@ -187,9 +182,8 @@ export async function uploadCampaignImage(
 }
 
 /**
- * Uploads a video file directly (MP4, WebM, MOV).
- * If Supabase is configured: uploads to Supabase Storage.
- * If local: saves to IndexedDB (preventing 5MB localStorage crash) and returns an idb reference.
+ * Uploads a video file directly to Supabase Storage in the 'campaign-assets' bucket.
+ * This guarantees the video is hosted on Supabase and accessible to all clients and visitors.
  */
 export async function uploadCampaignVideo(
   siteId: string,
@@ -201,58 +195,48 @@ export async function uploadCampaignVideo(
   const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${fileExt}`;
   const filePath = `${cleanSiteId}/${folder}/${fileName}`;
 
-  // 1. If Supabase is configured, upload to bucket 'campaign-assets'
-  if (isSupabaseConfigured && supabase) {
-    try {
-      const { data, error } = await supabase.storage
-        .from('campaign-assets')
-        .upload(filePath, file, {
-          cacheControl: '3600',
-          upsert: true,
-          contentType: file.type || 'video/mp4',
-        });
-
-      if (!error && data) {
-        const { data: publicUrlData } = supabase.storage
-          .from('campaign-assets')
-          .getPublicUrl(filePath);
-
-        return {
-          url: publicUrlData.publicUrl,
-          path: filePath,
-          name: file.name,
-          size: file.size,
-          type: file.type,
-        };
-      }
-    } catch (e) {
-      console.warn('Supabase video upload error, falling back to local storage:', e);
-    }
+  // Check if Supabase is connected
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error(
+      'O Supabase não está configurado na Vercel! Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para salvar o vídeo na nuvem para todos os visitantes.'
+    );
   }
 
-  // 2. Local Fallback via IndexedDB (handles large video files up to hundreds of megabytes safely)
-  try {
-    const idbKey = `hero_video_${cleanSiteId}`;
-    await saveMediaBlob(idbKey, file);
-    return {
-      url: `idb:${idbKey}`,
-      path: filePath,
-      name: file.name,
-      size: file.size,
-      type: file.type,
-    };
-  } catch (err) {
-    console.error('IndexedDB video save error:', err);
-    // Absolute fallback
-    const objUrl = URL.createObjectURL(file);
-    return {
-      url: objUrl,
-      path: filePath,
-      name: file.name,
-      size: file.size,
-      type: file.type,
-    };
+  // Upload to Supabase Storage bucket 'campaign-assets'
+  const { data, error } = await supabase.storage
+    .from('campaign-assets')
+    .upload(filePath, file, {
+      cacheControl: '3600',
+      upsert: true,
+      contentType: file.type || 'video/mp4',
+    });
+
+  if (error) {
+    throw new Error(
+      `Erro no Supabase Storage: ${error.message}. Verifique se o bucket "campaign-assets" foi criado como público no Supabase.`
+    );
   }
+
+  if (!data) {
+    throw new Error('Falha ao obter confirmação de envio do Supabase Storage.');
+  }
+
+  // Get public URL from Supabase
+  const { data: publicUrlData } = supabase.storage
+    .from('campaign-assets')
+    .getPublicUrl(filePath);
+
+  if (!publicUrlData?.publicUrl) {
+    throw new Error('Não foi possível gerar a URL pública do vídeo no Supabase.');
+  }
+
+  return {
+    url: publicUrlData.publicUrl,
+    path: filePath,
+    name: file.name,
+    size: file.size,
+    type: file.type,
+  };
 }
 
 export function getYouTubeThumbnail(url: string): string {
