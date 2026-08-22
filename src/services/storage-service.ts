@@ -190,16 +190,21 @@ export async function uploadCampaignVideo(
   folder: StorageFolder,
   file: File
 ): Promise<UploadResult> {
-  const cleanSiteId = siteId || 'default-site';
-  const fileExt = file.name.split('.').pop() || 'mp4';
+  const cleanSiteId = (siteId || 'default-site').replace(/[^a-zA-Z0-9_-]/g, '');
+  const fileExt = file.name.split('.').pop()?.toLowerCase() || 'mp4';
   const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${fileExt}`;
   const filePath = `${cleanSiteId}/${folder}/${fileName}`;
 
   // Check if Supabase is connected
   if (!isSupabaseConfigured || !supabase) {
     throw new Error(
-      'O Supabase não está configurado na Vercel! Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para salvar o vídeo na nuvem para todos os visitantes.'
+      'O Supabase não está configurado na Vercel! Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para salvar o vídeo na nuvem.'
     );
+  }
+
+  // Warning for oversized files that trigger HTTP 520 (Cloudflare timeout / Supabase limit)
+  if (file.size > 50 * 1024 * 1024) {
+    console.warn('Arquivo de vídeo superior a 50MB. Pode exceder o limite de upload HTTP direto do Supabase.');
   }
 
   // Upload to Supabase Storage bucket 'campaign-assets'
@@ -212,8 +217,14 @@ export async function uploadCampaignVideo(
     });
 
   if (error) {
+    const errorMsg = error.message || '';
+    if (errorMsg.includes('520') || errorMsg.toLowerCase().includes('bucket not found') || errorMsg.toLowerCase().includes('not found') || errorMsg.toLowerCase().includes('row-level security')) {
+      throw new Error(
+        `Erro no Supabase Storage: Bucket "campaign-assets" não encontrado ou sem permissão pública. Acesse o painel do Supabase -> Storage -> "New Bucket" -> crie com o nome "campaign-assets" marcado como "Public bucket", ou execute o script SQL atualizado na aba "Estrutura SQL".`
+      );
+    }
     throw new Error(
-      `Erro no Supabase Storage: ${error.message}. Verifique se o bucket "campaign-assets" foi criado como público no Supabase.`
+      `Erro no Supabase Storage (${errorMsg}). Verifique se o bucket "campaign-assets" foi criado como público no Supabase.`
     );
   }
 

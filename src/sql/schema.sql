@@ -421,20 +421,35 @@ CREATE POLICY "Members can manage contact settings" ON public.contact_settings
 -- Inserir bucket 'campaign-assets' se não existir
 INSERT INTO storage.buckets (id, name, public) 
 VALUES ('campaign-assets', 'campaign-assets', true)
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+-- Remover políticas antigas para evitar conflito
+DROP POLICY IF EXISTS "Public Read Campaign Assets" ON storage.objects;
+DROP POLICY IF EXISTS "Members Upload Campaign Assets" ON storage.objects;
+DROP POLICY IF EXISTS "Members Delete Campaign Assets" ON storage.objects;
+DROP POLICY IF EXISTS "Allow Upload Campaign Assets" ON storage.objects;
+DROP POLICY IF EXISTS "Allow Update Campaign Assets" ON storage.objects;
+DROP POLICY IF EXISTS "Allow Delete Campaign Assets" ON storage.objects;
 
 -- Leitura pública de assets
 CREATE POLICY "Public Read Campaign Assets"
 ON storage.objects FOR SELECT
 USING (bucket_id = 'campaign-assets');
 
--- Upload restrito a membros autorizados
-CREATE POLICY "Members Upload Campaign Assets"
+-- Upload permitido para campaign-assets
+CREATE POLICY "Allow Upload Campaign Assets"
 ON storage.objects FOR INSERT
-WITH CHECK (
-  bucket_id = 'campaign-assets' AND
-  auth.role() = 'authenticated'
-);
+WITH CHECK (bucket_id = 'campaign-assets');
 
--- Gaurantee migration of background_video_url if table already existed
+-- Edição permitida para campaign-assets
+CREATE POLICY "Allow Update Campaign Assets"
+ON storage.objects FOR UPDATE
+USING (bucket_id = 'campaign-assets');
+
+-- Exclusão permitida para campaign-assets
+CREATE POLICY "Allow Delete Campaign Assets"
+ON storage.objects FOR DELETE
+USING (bucket_id = 'campaign-assets');
+
+-- Garantir coluna background_video_url se a tabela hero já existia
 ALTER TABLE public.hero ADD COLUMN IF NOT EXISTS background_video_url TEXT;

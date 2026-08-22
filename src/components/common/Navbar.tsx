@@ -105,7 +105,16 @@ export const Navbar: React.FC = () => {
           </nav>
 
           {/* Desktop CTA Buttons */}
-          <div className="hidden sm:flex items-center gap-3">
+          <div className="hidden sm:flex items-center gap-2.5">
+            <Link
+              to="/admin"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+              title="Área Administrativa"
+            >
+              <Shield className="w-3.5 h-3.5 text-sky-600" />
+              <span>Painel</span>
+            </Link>
+
             {whatsappNumber && (
               <a
                 href={whatsappUrl}
@@ -158,7 +167,7 @@ export const Navbar: React.FC = () => {
           </div>
 
           {whatsappNumber && (
-            <div className="pt-3">
+            <div className="pt-3 space-y-2">
               <a
                 href={whatsappUrl}
                 target="_blank"
@@ -168,6 +177,14 @@ export const Navbar: React.FC = () => {
                 <MessageCircle className="w-5 h-5" />
                 <span>Falar no WhatsApp da Campanha</span>
               </a>
+
+              <Link
+                to="/admin"
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+              >
+                <Shield className="w-4 h-4 text-sky-600" />
+                <span>Acessar Painel Administrativo</span>
+              </Link>
             </div>
           )}
         </div>

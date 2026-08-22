@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { UserCheck, Plus, Trash2, Shield, User, Mail, ShieldAlert } from 'lucide-react';
+import { UserCheck, Plus, Trash2, Shield, User, Mail, ShieldAlert, KeyRound } from 'lucide-react';
 import { useTenant } from '../../context/TenantContext';
+import { useAuth } from '../../context/AuthContext';
 import { dataStore } from '../../services/data-store';
 import { SiteMember, UserRole } from '../../types';
 import { Modal } from '../../components/common/Modal';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog';
 
 export const AdminUsersPage: React.FC = () => {
-  const { currentSite, currentMember, themeSettings } = useTenant();
+  const { currentSite, themeSettings } = useTenant();
+  const { user: currentUser, currentRole } = useAuth();
   const [members, setMembers] = useState<SiteMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -16,6 +18,7 @@ export const AdminUsersPage: React.FC = () => {
 
   const [form, setForm] = useState({
     user_email: '',
+    full_name: '',
     role: 'editor' as UserRole,
   });
 
@@ -35,16 +38,16 @@ export const AdminUsersPage: React.FC = () => {
     e.preventDefault();
     if (!currentSite || !form.user_email) return;
 
-    await dataStore.addSiteMember({
-      site_id: currentSite.id,
-      user_id: `user-${Date.now()}`,
-      user_email: form.user_email,
-      role: form.role,
-    });
+    await dataStore.addSiteMember(
+      currentSite.id,
+      form.user_email.trim().toLowerCase(),
+      form.role,
+      form.full_name.trim() || undefined
+    );
 
-    setForm({ user_email: '', role: 'editor' });
+    setForm({ user_email: '', full_name: '', role: 'editor' });
     setModalOpen(false);
-    loadMembers();
+    await loadMembers();
   };
 
   const handleRemoveMember = async () => {
@@ -52,12 +55,12 @@ export const AdminUsersPage: React.FC = () => {
       await dataStore.removeSiteMember(memberToDelete);
       setMemberToDelete(null);
       setDeleteDialogOpen(false);
-      loadMembers();
+      await loadMembers();
     }
   };
 
   const primaryColor = themeSettings?.primary_color || '#0284c7';
-  const isAdmin = currentMember?.role === 'admin';
+  const canManage = currentRole === 'owner' || currentRole === 'admin' || !currentRole;
 
   return (
     <div className="space-y-6">
@@ -71,7 +74,7 @@ export const AdminUsersPage: React.FC = () => {
           </p>
         </div>
 
-        {isAdmin && (
+        {canManage && (
           <button
             type="button"
             onClick={() => setModalOpen(true)}
@@ -103,40 +106,46 @@ export const AdminUsersPage: React.FC = () => {
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs overflow-hidden">
           <div className="divide-y divide-slate-100">
             {members.map((m) => {
-              const isCurrentUser = m.user_id === currentMember?.user_id;
+              const memberEmail = m.profile?.email || m.user_email || 'usuario@campanha.com';
+              const memberName = m.profile?.full_name || memberEmail.split('@')[0];
+              const isCurrentUser = memberEmail.toLowerCase() === currentUser?.email?.toLowerCase() || m.user_id === currentUser?.id;
               return (
                 <div key={m.id} className="p-4 sm:p-5 flex items-center justify-between gap-4 hover:bg-slate-50/50 transition-colors">
                   <div className="flex items-center gap-3.5">
                     <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-sm">
-                      {m.user_email.charAt(0).toUpperCase()}
+                      {memberEmail.charAt(0).toUpperCase()}
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 text-sm">{m.user_email}</span>
+                        <span className="font-bold text-slate-900 text-sm">{memberName}</span>
                         {isCurrentUser && (
                           <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-bold text-[10px]">
                             Você
                           </span>
                         )}
                       </div>
-                      <span className="text-xs text-slate-500">
-                        Adicionado em {new Date(m.created_at).toLocaleDateString('pt-BR')}
-                      </span>
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <span className="font-mono">{memberEmail}</span>
+                        <span>•</span>
+                        <span>Adicionado em {new Date(m.created_at).toLocaleDateString('pt-BR')}</span>
+                      </div>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-3">
                     <span
                       className={`px-3 py-1 rounded-full text-xs font-bold capitalize ${
-                        m.role === 'admin'
+                        m.role === 'owner'
+                          ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                          : m.role === 'admin'
                           ? 'bg-purple-50 text-purple-700 border border-purple-200'
                           : 'bg-blue-50 text-blue-700 border border-blue-200'
                       }`}
                     >
-                      {m.role === 'admin' ? 'Administrador' : 'Editor de Conteúdo'}
+                      {m.role === 'owner' ? 'Administrador Geral' : m.role === 'admin' ? 'Coordenador' : 'Editor de Conteúdo'}
                     </span>
 
-                    {isAdmin && !isCurrentUser && (
+                    {canManage && !isCurrentUser && (
                       <button
                         type="button"
                         onClick={() => {
@@ -166,7 +175,23 @@ export const AdminUsersPage: React.FC = () => {
         <form onSubmit={handleAddMember} className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-              E-mail do Assessor / Usuário *
+              Nome do Membro / Assessor
+            </label>
+            <div className="relative">
+              <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={form.full_name}
+                onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+                placeholder="Ex: Carlos Silva"
+                className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+              E-mail de Acesso *
             </label>
             <div className="relative">
               <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -191,7 +216,8 @@ export const AdminUsersPage: React.FC = () => {
               className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:bg-white"
             >
               <option value="editor">Editor (Pode criar e editar conteúdos, propostas, agenda e notícias)</option>
-              <option value="admin">Administrador (Acesso total incluindo equipe, cores, tema e configurações)</option>
+              <option value="admin">Coordenador (Acesso às configurações, equipe e conteúdos)</option>
+              <option value="owner">Administrador Geral (Acesso total)</option>
             </select>
           </div>
 

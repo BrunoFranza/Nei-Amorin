@@ -51,6 +51,20 @@ export const SEED_SITES: Site[] = [
 
 export const SEED_PROFILES: Profile[] = [
   {
+    id: 'user-master-bruno',
+    email: 'brunofranza@gmail.com',
+    full_name: 'Bruno Franza (Administrador Geral)',
+    avatar_url: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&auto=format&fit=crop&q=80',
+    created_at: '2026-01-01T10:00:00Z',
+  },
+  {
+    id: 'user-admin-ney',
+    email: 'admin@neyamorim.com.br',
+    full_name: 'Coordenação Geral (Ney Amorim)',
+    avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    created_at: '2026-01-10T10:00:00Z',
+  },
+  {
     id: 'user-admin-a-uuid',
     email: 'adminA@campanha.com',
     full_name: 'Roberto Mendes (Coord. Geral Ney Amorim)',
@@ -129,6 +143,27 @@ export const SEED_SITE_MEMBERS: SiteMember[] = [
     user_id: 'user-superadmin-uuid',
     role: 'owner',
     created_at: '2026-01-10T10:00:00Z',
+  },
+  {
+    id: 'mem-ney-bruno',
+    site_id: 'site-ney-amorim',
+    user_id: 'user-master-bruno',
+    role: 'owner',
+    created_at: '2026-01-01T10:00:00Z',
+  },
+  {
+    id: 'mem-a-bruno',
+    site_id: 'site-a-uuid-carlos',
+    user_id: 'user-master-bruno',
+    role: 'owner',
+    created_at: '2026-01-01T10:00:00Z',
+  },
+  {
+    id: 'mem-b-bruno',
+    site_id: 'site-b-uuid-mariana',
+    user_id: 'user-master-bruno',
+    role: 'owner',
+    created_at: '2026-01-01T10:00:00Z',
   },
 ];
 
